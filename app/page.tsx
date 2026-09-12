@@ -1,47 +1,57 @@
-export default function Page() {
-  return (
-    <main
-      style={{
-        colorScheme: 'light dark',
-        position: 'relative',
-        display: 'flex',
-        minHeight: '100vh',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'light-dark(#fff, #000)',
-        color: 'light-dark(#000, #fff)',
-      }}
-    >
-      <svg
-        aria-hidden="true"
-        style={{ width: 80, height: 80 }}
-        width={80}
-        height={80}
-        fill="none"
-        viewBox="0 0 20 20"
-        xmlns="http://www.w3.org/2000/svg"
-        stroke="currentColor"
-        strokeWidth="0.5"
-      >
-        <path
-          d="M14.2 14.2H17V6.9375C17 4.76288 15.2371 3 13.0625 3H5.8V5.8M14.2 14.2V7.79063L7.79062 14.2H14.2ZM14.2 14.2V17H6.9375C4.76288 17 3 15.2371 3 13.0625V5.8H5.8M5.8 5.8V12.2313L12.2313 5.8H5.8Z"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <p
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: 'calc(50% + 56px)',
-          transform: 'translateX(-50%)',
-          whiteSpace: 'nowrap',
-          fontSize: '14px',
-          fontWeight: 500,
-          color: 'light-dark(#71717a, #a1a1aa)',
-        }}
-      >
-        Your v0 generation will show here.
-      </p>
-    </main>
-  )
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { Eye, FileCode2, FilePenLine, Menu, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
+import { authClient } from '@/lib/auth-client'
+import { deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
+import { getLeaderboard, updateProfile } from '@/app/actions/leaderboard'
+
+type FileItem = { name: string; accesses: number; content: string }
+const initialFiles: FileItem[] = [
+  { name: 'middleware.ts', accesses: 1248, content: 'export function middleware(request) {\n  return NextResponse.next()\n}' },
+  { name: 'route-handler.ts', accesses: 486, content: 'export async function GET() {\n  return Response.json({ ok: true })\n}' },
+]
+
+function Brand() {
+  return <div className="brand-mark" aria-label="Secrovia"><ShieldCheck size={21} strokeWidth={2.2} /><span>SECROVIA</span></div>
+}
+
+function AuthScreen({ onAuth }: { onAuth: () => void }) {
+  const [mode, setMode] = useState<'login' | 'signup'>('login')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [message, setMessage] = useState('')
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (mode === 'signup' && password !== confirm) return setMessage('Mật khẩu nhập lại không khớp')
+    const email = `${username.trim().toLowerCase()}@secrovia.local`
+    const result = mode === 'login' ? await authClient.signIn.email({ email, password }) : await authClient.signUp.email({ email, password, name: username.trim() })
+    if (result.error) return setMessage('Tên tài khoản hoặc mật khẩu không hợp lệ')
+    setMessage('')
+    onAuth()
+  }
+  return <main className="auth-page"><div className="auth-panel"><Brand /><div className="auth-heading"><p className="eyebrow">Protected code storage</p><h1>{mode === 'login' ? 'Welcome back.' : 'Create your account.'}</h1><p>{mode === 'login' ? 'Sign in to continue to your workspace.' : 'Keep every code link under your control.'}</p></div><div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>Sign Up</button></div><form onSubmit={submit} className="auth-form"><label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Enter your username" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required /></label>{mode === 'signup' && <label>Confirm password<input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat your password" required /></label>}{message && <p className="form-error">{message}</p>}<button className="primary-button" type="submit">{mode === 'login' ? 'Login' : 'Sign Up'}</button></form><p className="secure-note"><ShieldCheck size={14} /> Your code stays protected.</p></div></main>
+}
+
+function Workspace() {
+  const [fileName, setFileName] = useState('')
+  const [profileName, setProfileName] = useState('Obi')
+  const [leaders, setLeaders] = useState<Array<{ name: string | null; image: string | null; accesses: number }>>([])
+  const [code, setCode] = useState('')
+  const [files, setFiles] = useState(initialFiles)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [modal, setModal] = useState<'leaderboard' | 'profile' | 'admin' | 'delete' | null>(null)
+  const [deleteName, setDeleteName] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { void incrementSiteVisit(); void listFiles().then((saved) => { if (saved.length) setFiles(saved.map((file) => ({ name: file.name, accesses: file.rawAccessCount, content: file.content }))) }).catch(() => undefined); void getLeaderboard().then(setLeaders).catch(() => undefined) }, [])
+  function uploadFile(event: React.ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; setFileName(file.name); const reader = new FileReader(); reader.onload = () => setCode(String(reader.result ?? '')); reader.readAsText(file) }
+  async function saveFile() { if (!fileName.trim()) return; await saveCodeFile(fileName, code); setFiles((current) => { const name = fileName.trim(); const existing = current.some((file) => file.name === name); return existing ? current.map((file) => file.name === name ? { ...file, content: code } : file) : [{ name, content: code, accesses: 0 }, ...current] }) }
+  function editFile(file: FileItem) { setFileName(file.name); setCode(file.content); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  return <main className="workspace-page"><header className="topbar"><Brand /><div className="topbar-right"><span className="online-dot" /><span>Obi</span><button className="menu-button" aria-label="Open menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={23} /></button></div></header>{menuOpen && <div className="menu-popover"><button onClick={() => { setModal('leaderboard'); setMenuOpen(false) }}>Leaderboard</button><button onClick={() => { setModal('profile'); setMenuOpen(false) }}>Profile</button><button onClick={() => { setModal('admin'); setMenuOpen(false) }}>Admin</button></div>}<section className="workspace-shell"><div className="workspace-heading"><div><p className="eyebrow">Private workspace</p><h1>Code vault</h1></div><span className="status-pill">Protected</span></div><div className="editor-card"><div className="editor-toolbar"><label className="file-name-input"><FileCode2 size={17} /><input value={fileName} onChange={(event) => setFileName(event.target.value)} placeholder="Code file name" /></label><input ref={inputRef} type="file" accept=".js,.jsx,.ts,.tsx,.json,.css,.html,.py,.txt" onChange={uploadFile} hidden /><button className="secondary-button" onClick={() => inputRef.current?.click()}><Upload size={16} /> Upload file code</button></div><textarea className="code-editor" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Paste your code here..." spellCheck={false} /><div className="editor-actions"><button className="ghost-button" onClick={() => { setCode(''); setFileName('') }}>Clear</button><button className="primary-button compact" onClick={saveFile}>Save Code</button></div></div><div className="files-heading"><h2>Your code files</h2><span>{files.length} files</span></div><div className="file-list">{files.map((file) => <article className="file-row" key={file.name}><div className="file-identity"><div className="file-icon"><FileCode2 size={18} /></div><div><strong>{file.name}</strong><small>Raw link protected</small></div></div><div className="file-actions"><button aria-label={`Edit ${file.name}`} onClick={() => editFile(file)}><FilePenLine size={17} /></button><button aria-label={`Delete ${file.name}`} onClick={() => { setDeleteName(file.name); setModal('delete') }}><Trash2 size={17} /></button><button className="copy-button" onClick={() => navigator.clipboard?.writeText(`/raw/${file.name}`)}>Copy link raw</button><span className="access-count"><Eye size={16} /> {file.accesses.toLocaleString()}</span></div></article>)}</div></section>{modal && <div className="modal-backdrop"><div className="modal-card"><button className="modal-close" onClick={() => setModal(null)}><X size={18} /></button>{modal === 'delete' && <><p className="eyebrow">Delete file</p><h2>Are you sure?</h2><div className="modal-actions"><button className="ghost-button" onClick={() => setModal(null)}>No</button><button className="danger-button" onClick={async () => { const file = files.find((item) => item.name === deleteName); if (file) await deleteCodeFile(file.name); setFiles(files.filter((file) => file.name !== deleteName)); setModal(null) }}>Yes</button></div></>}{modal === 'leaderboard' && <><p className="eyebrow">Leaderboard</p><h2>Raw access leaders</h2>{leaders.map((leader, index) => <div className="leaderboard-row" key={`${leader.name}-${index}`}><span>Top {index + 1}</span><div className="avatar">{(leader.name ?? '?').slice(0, 1).toUpperCase()}</div><strong>{leader.name ?? 'Unknown'}</strong><b>{Number(leader.accesses).toLocaleString()}</b></div>)}</>}{modal === 'profile' && <><p className="eyebrow">Profile</p><h2>Account profile</h2><label>Username<input value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label><label>Avatar<input type="file" accept="image/*" /></label><button className="primary-button" onClick={async () => { await updateProfile(profileName, null); setModal(null) }}>Save profile</button></>}{modal === 'admin' && <><p className="eyebrow">Admin</p><h2>Secrovia overview</h2><div className="admin-stat"><span>Website visits</span><strong>12,840</strong></div><div className="admin-stat"><span>Total code files</span><strong>{files.length}</strong></div></>}</div></div>}</main>
+}
+
+export default function Home() {
+  const [authenticated, setAuthenticated] = useState(false)
+  return authenticated ? <Workspace /> : <AuthScreen onAuth={() => setAuthenticated(true)} />
 }

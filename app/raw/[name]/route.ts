@@ -11,8 +11,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   return new NextResponse(file[0].content, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 }
 
+export async function HEAD() { return protectedResponse() }
 export async function POST() { return protectedResponse() }
 export async function PUT() { return protectedResponse() }
 export async function PATCH() { return protectedResponse() }
 export async function DELETE() { return protectedResponse() }
-function protectedResponse() { return new NextResponse('This file was protected by Secrovia https://discord.gg/JqNpxc8QXk', { status: 405 }) }
+export async function OPTIONS() { return protectedResponse() }
+function protectedResponse() { return new NextResponse('This file was protected by secrovia https://discord.gg/JqNpxc8QXk', { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }) }

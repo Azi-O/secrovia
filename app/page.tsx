@@ -7,6 +7,16 @@ import { deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/a
 import { getLeaderboard, getProfile, updateProfile } from '@/app/actions/leaderboard'
 
 type FileItem = { name: string; accesses: number; content: string }
+const captchaKeywords = ['atom','byte','code','dark','data','edge','file','flux','grid','hash','input','key','link','node','pixel','proxy','raw','root','safe','scan','shell','stack','token','vault','web','alpha','apex','array','async','binary','cache','class','cloud','codec','core','cyber','debug','delta','encode','event','fetch','frame','guard','hex','index','json','logic','loop','merge','model','module','nonce','object','parse','patch','query','react','regex','route','schema','scope','script','secure','server','signal','slice','source','state','stream','string','syntax','table','task','trace','trust','typed','upload','value','vector','verify','widget','worker','access','agent','api','auth','build','client','commit','config','connect','deploy','engine','error','export','function','import','method','origin','package','request','response','runtime','session','style','system','update','version','write']
+
+function CaptchaScreen({ onContinue }: { onContinue: () => void }) {
+  const [keyword] = useState(() => captchaKeywords[Math.floor(Math.random() * captchaKeywords.length)])
+  const [answer, setAnswer] = useState('')
+  const [error, setError] = useState('')
+  function submit(event: React.FormEvent) { event.preventDefault(); if (answer.trim().toLowerCase() !== keyword) return setError('Incorrect keyword'); setError(''); onContinue() }
+  return <main className="auth-page"><div className="auth-panel captcha-panel"><Brand /><div className="auth-heading"><p className="eyebrow">Verification required</p><h1>Confirm access.</h1><p>Enter the keyword below to continue.</p></div><div className="captcha-keyword" aria-label="Captcha keyword">{keyword}</div><form onSubmit={submit} className="auth-form"><label>Keyword<input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Enter keyword" autoComplete="off" required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" type="submit">Continue</button></form></div></main>
+}
+
 const initialFiles: FileItem[] = [
   { name: 'middleware.ts', accesses: 1248, content: 'export function middleware(request) {\n  return NextResponse.next()\n}' },
   { name: 'route-handler.ts', accesses: 486, content: 'export async function GET() {\n  return Response.json({ ok: true })\n}' },
@@ -53,6 +63,8 @@ function Workspace() {
 }
 
 export default function Home() {
+  const [captchaPassed, setCaptchaPassed] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
+  if (!captchaPassed) return <CaptchaScreen onContinue={() => setCaptchaPassed(true)} />
   return authenticated ? <Workspace /> : <AuthScreen onAuth={() => setAuthenticated(true)} />
 }

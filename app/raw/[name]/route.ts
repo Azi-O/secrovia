@@ -4,6 +4,13 @@ import { db } from '@/lib/db'
 import { codeFile } from '@/lib/db/schema'
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ name: string }> }) {
+  const fetchMode = request.headers.get('sec-fetch-mode')
+  const accept = request.headers.get('accept') ?? ''
+  const userAgent = request.headers.get('user-agent') ?? ''
+  const isBrowserNavigation = fetchMode === 'navigate' || accept.includes('text/html')
+  const isHttpGetClient = /roblox|robloxstudio|httpget/i.test(userAgent)
+  if (isBrowserNavigation && !isHttpGetClient) return protectedResponse()
+
   const { name } = await params
   const file = await db.select().from(codeFile).where(eq(codeFile.name, decodeURIComponent(name))).limit(1)
   if (!file[0]) return new NextResponse('Not found', { status: 404 })
@@ -17,4 +24,4 @@ export async function PUT() { return protectedResponse() }
 export async function PATCH() { return protectedResponse() }
 export async function DELETE() { return protectedResponse() }
 export async function OPTIONS() { return protectedResponse() }
-function protectedResponse() { return new NextResponse('This file was protected by secrovia https://discord.gg/JqNpxc8QXk', { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }) }
+function protectedResponse() { return new NextResponse('This file was protected by Secrovia https://discord.gg/JqNpxc8QXk', { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } }) }

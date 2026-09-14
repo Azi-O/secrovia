@@ -6,7 +6,7 @@ import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { codeFile, siteStats, user } from '@/lib/db/schema'
+import { account, codeFile, session, siteStats, user } from '@/lib/db/schema'
 
 async function getUserId() {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -33,6 +33,25 @@ export async function deleteCodeFile(name: string) {
   const userId = await getUserId()
   await db.delete(codeFile).where(and(eq(codeFile.name, name), eq(codeFile.userId, userId)))
   revalidatePath('/')
+}
+
+export async function deleteAccount(username: string, password: string) {
+  const currentSession = await auth.api.getSession({ headers: await headers() })
+  if (!currentSession?.user) throw new Error('Unauthorized')
+  const cleanUsername = username.trim()
+  if (cleanUsername !== currentSession.user.name) throw new Error('Invalid account confirmation')
+  const email = `${cleanUsername.toLowerCase()}@secrovia.local`
+  try {
+    await auth.api.signInEmail({ body: { email, password } })
+  } catch {
+    throw new Error('Invalid account confirmation')
+  }
+  await db.transaction(async (tx) => {
+    await tx.delete(codeFile).where(eq(codeFile.userId, currentSession.user.id))
+    await tx.delete(session).where(eq(session.userId, currentSession.user.id))
+    await tx.delete(account).where(eq(account.userId, currentSession.user.id))
+    await tx.delete(user).where(eq(user.id, currentSession.user.id))
+  })
 }
 
 export async function incrementSiteVisit() {

@@ -6,6 +6,14 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { codeFile, user } from '@/lib/db/schema'
 
+export async function getStatus() {
+  const [accounts, files] = await Promise.all([
+    db.select({ id: user.id, name: user.name, fileCount: sql<number>`count(${codeFile.id})` }).from(user).leftJoin(codeFile, eq(codeFile.userId, user.id)).groupBy(user.id).orderBy(user.name),
+    db.select({ count: sql<number>`count(*)` }).from(user),
+  ])
+  return { accountCount: Number(files[0]?.count ?? 0), accounts: accounts.map((account) => ({ name: account.name, fileCount: Number(account.fileCount ?? 0) })) }
+}
+
 export async function getLeaderboard() {
   return db.select({ name: user.name, image: user.image, accesses: sql<number>`coalesce(sum(${codeFile.rawAccessCount}), 0)` }).from(user).leftJoin(codeFile, eq(codeFile.userId, user.id)).groupBy(user.id).orderBy(desc(sql`coalesce(sum(${codeFile.rawAccessCount}), 0)`)).limit(25)
 }

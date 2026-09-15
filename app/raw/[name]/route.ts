@@ -46,8 +46,6 @@ function protectedResponse() {
       .mark { width: 72px; height: 72px; margin: 30px auto 24px; display: grid; place-items: center; border: 1px solid #718e59; border-radius: 22px; color: #10150d; background: linear-gradient(145deg, #d4f69a, #85b65a); box-shadow: 0 12px 30px rgba(146, 198, 91, .2); font-size: 30px; font-weight: 900; }
       h1 { max-width: 480px; margin: 0 auto; font-size: clamp(28px, 6vw, 46px); line-height: 1.04; letter-spacing: -.06em; }
       p { max-width: 420px; margin: 18px auto 0; color: #aeb9af; line-height: 1.7; }
-      .note { display: flex; align-items: flex-start; gap: 10px; margin: 28px auto 0; padding: 13px 15px; border: 1px solid #29372d; border-radius: 12px; color: #89988c; background: rgba(8, 12, 9, .5); font-size: 12px; line-height: 1.55; text-align: left; }
-      .note strong { color: #d5e2d3; }
       a { display: inline-flex; align-items: center; justify-content: center; margin-top: 28px; padding: 13px 19px; border: 1px solid #d4f69a; border-radius: 11px; color: #11170d; background: #d4f69a; font-size: 14px; font-weight: 800; text-decoration: none; transition: transform .2s ease, background .2s ease; }
       a:hover { transform: translateY(-2px); background: #e1ffb0; }
       .brand { margin-top: 30px; color: #617066; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
@@ -60,7 +58,6 @@ function protectedResponse() {
       <div class="mark" aria-hidden="true">S</div>
       <h1>This file was protected by Secrovia</h1>
       <p>This raw source is restricted to authorized game HTTP clients. Browser access is intentionally blocked.</p>
-      <div class="note"><span aria-hidden="true">◆</span><span><strong>Access denied in browser</strong><br />Use the approved in-game request flow to read this file.</span></div>
       <a href="https://discord.gg/JqNpxc8QXk" rel="noopener noreferrer">Join the Secrovia Discord</a>
       <div class="brand">Secrovia · Secure code delivery</div>
     </section></main>

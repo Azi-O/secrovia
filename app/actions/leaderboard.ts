@@ -30,6 +30,17 @@ export async function getProfile() {
   return result[0] ?? { name: '', image: null }
 }
 
+export async function getProfileStats() {
+  const userId = await getCurrentUser()
+  const result = await db.select({ fileCount: sql<number>`count(${codeFile.id})`, mostAccessedName: sql<string | null>`(array_agg(${codeFile.name} order by ${codeFile.rawAccessCount} desc))[1]` }).from(codeFile).where(eq(codeFile.userId, userId)).groupBy(codeFile.userId)
+  return { fileCount: Number(result[0]?.fileCount ?? 0), mostAccessedName: result[0]?.mostAccessedName ?? 'None yet' }
+}
+
+export async function getAdminStats() {
+  const result = await db.select({ fileCount: sql<number>`count(*)`, totalAccesses: sql<number>`coalesce(sum(${codeFile.rawAccessCount}), 0)` }).from(codeFile)
+  return { fileCount: Number(result[0]?.fileCount ?? 0), totalAccesses: Number(result[0]?.totalAccesses ?? 0) }
+}
+
 export async function updateProfile(name: string, image?: string | null) {
   const userId = await getCurrentUser()
   const nextName = name.trim().slice(0, 80)
@@ -37,5 +48,5 @@ export async function updateProfile(name: string, image?: string | null) {
   const values: { name: string; updatedAt: Date; image?: string | null } = { name: nextName, updatedAt: new Date() }
   if (image !== undefined) values.image = image
   await db.update(user).set(values).where(eq(user.id, userId))
-  return { name: nextName, image: image === undefined ? undefined : image }
+  return { name: nextName, image: image === undefined ? undefined : image ?? null }
 }

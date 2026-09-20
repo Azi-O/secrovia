@@ -43,7 +43,7 @@ function protectedResponse() {
       .card { padding: clamp(28px, 7vw, 64px); border: 1px solid rgba(160, 188, 165, .14); border-radius: 20px; background: linear-gradient(145deg, rgba(31, 42, 35, .92), rgba(13, 17, 15, .94)); text-align: center; }
       .badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid #39483b; border-radius: 999px; color: #b9d99d; background: #172019; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
       .badge i { width: 7px; height: 7px; border-radius: 50%; background: #b9e86d; box-shadow: 0 0 14px #b9e86d; }
-      .mark { width: 72px; height: 72px; margin: 30px auto 24px; display: grid; place-items: center; border: 1px solid #718e59; border-radius: 22px; color: #10150d; background: linear-gradient(145deg, #d4f69a, #85b65a); box-shadow: 0 12px 30px rgba(146, 198, 91, .2); font-size: 30px; font-weight: 900; }
+      .mark { width: 82px; height: 82px; margin: 30px auto 24px; display: grid; place-items: center; overflow: hidden; border: 1px solid #718e59; border-radius: 22px; background: linear-gradient(145deg, #d4f69a, #85b65a); box-shadow: 0 12px 30px rgba(146, 198, 91, .2); } .mark img { width: 100%; height: 100%; object-fit: cover; }
       h1 { max-width: 480px; margin: 0 auto; font-size: clamp(28px, 6vw, 46px); line-height: 1.04; letter-spacing: -.06em; }
       p { max-width: 420px; margin: 18px auto 0; color: #aeb9af; line-height: 1.7; }
       a { display: inline-flex; align-items: center; justify-content: center; margin-top: 28px; padding: 13px 19px; border: 1px solid #d4f69a; border-radius: 11px; color: #11170d; background: #d4f69a; font-size: 14px; font-weight: 800; text-decoration: none; transition: transform .2s ease, background .2s ease; }
@@ -54,7 +54,7 @@ function protectedResponse() {
   </head>
   <body>
     <main><section class="card">
-      <div class="mark" aria-hidden="true">S</div>
+      <div class="mark"><img src="https://res.cloudinary.com/dtz0urit6/image/upload/f_png,q_auto/cloudinary-tools-uploads/anthu0ohnfyuikenobqi.png" alt="Secrovia logo" /></div>
       <h1>This file was protected by Secrovia</h1>
       <p>https://secrovia.vercel.app</p>
       <a href="https://discord.gg/JqNpxc8QXk" rel="noopener noreferrer">Join the Secrovia Discord</a>

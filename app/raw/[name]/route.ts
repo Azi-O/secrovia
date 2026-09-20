@@ -54,10 +54,9 @@ function protectedResponse() {
   </head>
   <body>
     <main><section class="card">
-      <div class="badge"><i></i> Protected raw access</div>
       <div class="mark" aria-hidden="true">S</div>
       <h1>This file was protected by Secrovia</h1>
-      <p>This raw source is restricted to authorized game HTTP clients. Browser access is intentionally blocked.</p>
+      <p>https://secrovia.vercel.app</p>
       <a href="https://discord.gg/JqNpxc8QXk" rel="noopener noreferrer">Join the Secrovia Discord</a>
       <div class="brand">Secrovia · Secure code delivery</div>
     </section></main>

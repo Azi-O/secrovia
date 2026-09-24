@@ -35,20 +35,20 @@ function protectedResponse() {
     <style>
       :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
-      body { min-height: 100vh; margin: 0; display: grid; place-items: center; overflow: hidden; padding: 24px; color: #f5f7f2; background: #080a09; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; overflow: hidden; padding: 24px; color: #f4f4f5; background: #09090b; }
       body::before, body::after { position: fixed; z-index: -1; width: 420px; height: 420px; border-radius: 50%; content: ""; filter: blur(90px); opacity: .16; }
-      body::before { top: -180px; left: -120px; background: #a8e650; }
-      body::after { right: -160px; bottom: -180px; background: #4d8c72; }
-      main { width: min(100%, 620px); padding: 12px; border: 1px solid #29332d; border-radius: 28px; background: rgba(17, 22, 19, .72); box-shadow: 0 30px 100px rgba(0,0,0,.48); backdrop-filter: blur(18px); }
-      .card { padding: clamp(28px, 7vw, 64px); border: 1px solid rgba(160, 188, 165, .14); border-radius: 20px; background: linear-gradient(145deg, rgba(31, 42, 35, .92), rgba(13, 17, 15, .94)); text-align: center; }
+      body::before { top: -180px; left: -120px; background: #71717a; }
+      body::after { right: -160px; bottom: -180px; background: #3f3f46; }
+      main { width: min(100%, 620px); padding: 12px; border: 1px solid #27272a; border-radius: 28px; background: rgba(24, 24, 27, .78); box-shadow: 0 30px 100px rgba(0,0,0,.48); backdrop-filter: blur(18px); }
+      .card { padding: clamp(28px, 7vw, 64px); border: 1px solid rgba(160, 188, 165, .14); border-radius: 20px; background: linear-gradient(145deg, rgba(39, 39, 42, .96), rgba(15, 15, 17, .97)); text-align: center; }
       .badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid #39483b; border-radius: 999px; color: #b9d99d; background: #172019; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
       .badge i { width: 7px; height: 7px; border-radius: 50%; background: #b9e86d; box-shadow: 0 0 14px #b9e86d; }
-      .mark { width: 82px; height: 82px; margin: 30px auto 24px; display: grid; place-items: center; overflow: hidden; border: 1px solid #718e59; border-radius: 22px; background: linear-gradient(145deg, #d4f69a, #85b65a); box-shadow: 0 12px 30px rgba(146, 198, 91, .2); } .mark img { width: 100%; height: 100%; object-fit: cover; }
+      .mark { width: 82px; height: 82px; margin: 30px auto 24px; display: grid; place-items: center; overflow: hidden; border: 1px solid #71717a; border-radius: 22px; background: linear-gradient(145deg, #e4e4e7, #71717a); box-shadow: 0 12px 30px rgba(255, 255, 255, .12); } .mark img { width: 100%; height: 100%; object-fit: cover; }
       h1 { max-width: 480px; margin: 0 auto; font-size: clamp(28px, 6vw, 46px); line-height: 1.04; letter-spacing: -.06em; }
       p { max-width: 420px; margin: 18px auto 0; color: #aeb9af; line-height: 1.7; }
-      a { display: inline-flex; align-items: center; justify-content: center; margin-top: 28px; padding: 13px 19px; border: 1px solid #d4f69a; border-radius: 11px; color: #11170d; background: #d4f69a; font-size: 14px; font-weight: 800; text-decoration: none; transition: transform .2s ease, background .2s ease; }
-      a:hover { transform: translateY(-2px); background: #e1ffb0; }
-      .brand { margin-top: 30px; color: #617066; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+      a { display: inline-flex; align-items: center; justify-content: center; margin-top: 28px; padding: 13px 19px; border: 1px solid #e4e4e7; border-radius: 11px; color: #18181b; background: #e4e4e7; font-size: 14px; font-weight: 800; text-decoration: none; transition: transform .2s ease, background .2s ease; }
+      a:hover { transform: translateY(-2px); background: #fafafa; }
+      .brand { margin-top: 30px; color: #71717a; font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
       @media (max-width: 480px) { body { padding: 14px; } main { border-radius: 22px; } .card { padding: 30px 20px; } }
     </style>
   </head>

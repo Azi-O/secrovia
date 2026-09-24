@@ -1,4 +1,4 @@
-import type { Token, SourceLocation } from "../tokens.js";
+import type { Token, SourceLocation } from "../tokens";
 import type {
   Chunk,
   Statement,
@@ -35,8 +35,8 @@ import type {
   ReturnType,
   GenericTypeListWithDefaults,
   Attribute,
-} from "../ast/types.js";
-import { parseType, parseReturnType, parseGenericTypeListWithDefaults } from "./TypeParser.js";
+} from "../ast/types";
+import { parseType, parseReturnType, parseGenericTypeListWithDefaults } from "./TypeParser";
 
 const BINARY_PRECEDENCE: Record<string, number> = {
   "or": 1,

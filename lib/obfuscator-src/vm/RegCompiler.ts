@@ -12,13 +12,13 @@ import type {
   Param,
   FuncName,
   TableField,
-} from "../ast/types.js";
-import type { RegBytecodeChunk, Constant } from "./bytecode.js";
+} from "../ast/types";
+import type { RegBytecodeChunk, Constant } from "./bytecode";
 import {
   RegOp, RK_OFFSET, RK,
   regEmit, regPatch, regPC, regAddConst,
   createRegChunk, regAddProto,
-} from "./bytecode.js";
+} from "./bytecode";
 
 interface LoopCtx {
   breakPatches: number[];

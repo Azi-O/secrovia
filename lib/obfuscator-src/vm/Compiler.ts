@@ -4,9 +4,9 @@ import type {
   LastStatement,
   Expression,
   Var,
-} from "../ast/types.js";
-import type { BytecodeChunk, Constant } from "./bytecode.js";
-import { Op, emit, addConst } from "./bytecode.js";
+} from "../ast/types";
+import type { BytecodeChunk, Constant } from "./bytecode";
+import { Op, emit, addConst } from "./bytecode";
 
 interface LoopContext {
   breakPatches: number[];

@@ -1,5 +1,5 @@
-import type { BytecodeChunk, Constant } from "./bytecode.js";
-import { Op } from "./bytecode.js";
+import type { BytecodeChunk, Constant } from "./bytecode";
+import { Op } from "./bytecode";
 
 export interface VMRunnerEnv {
   [key: string]: unknown;

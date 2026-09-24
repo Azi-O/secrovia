@@ -1,4 +1,4 @@
-import type { Token, SourceLocation } from "../tokens.js";
+import type { Token, SourceLocation } from "../tokens";
 import type {
   Type,
   NilType,
@@ -19,7 +19,7 @@ import type {
   BoundType,
   ReturnType,
   GenericTypeListWithDefaults,
-} from "../ast/types.js";
+} from "../ast/types";
 
 export interface TypeParserContext {
   tokens: Token[];

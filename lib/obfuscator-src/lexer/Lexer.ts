@@ -8,13 +8,13 @@ import type {
   PunctuatorToken,
   EOFToken,
   SourceLocation,
-} from "../tokens.js";
+} from "../tokens";
 import {
   KEYWORDS,
   MULTI_CHAR_OPERATORS,
   SINGLE_CHAR_OPERATORS,
-} from "../tokens.js";
-import type { Position, LexError } from "./types.js";
+} from "../tokens";
+import type { Position, LexError } from "./types";
 
 export interface LexResult {
   tokens: Token[];

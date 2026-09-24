@@ -7,8 +7,8 @@ import type {
   IfStatement,
   WhileStatement,
   RepeatStatement,
-} from "../ast/types.js";
-import type { SourceLocation } from "../tokens.js";
+} from "../ast/types";
+import type { SourceLocation } from "../tokens";
 
 const OPAQUE_PREDICATES: [number, string, number, number][] = [
   [7, "*", 7, 49],

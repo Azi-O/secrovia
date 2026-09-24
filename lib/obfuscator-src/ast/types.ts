@@ -1,4 +1,4 @@
-import type { SourceLocation } from "../tokens.js";
+import type { SourceLocation } from "../tokens";
 
 export interface BaseNode {
   type: string;

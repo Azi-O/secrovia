@@ -7,7 +7,7 @@ import type {
   Identifier,
   FuncName,
   Param,
-} from "../ast/types.js";
+} from "../ast/types";
 
 const KEYWORDS = new Set([
   "and", "break", "continue", "do", "else", "elseif", "end", "export", "false",
@@ -258,7 +258,7 @@ function transformStatement(stmt: Statement | LastStatement, scope: ScopeManager
 function transformFuncName(fn: FuncName, scope: ScopeManager): FuncName {
   const base = fn.base.type === "Identifier"
     ? { ...fn.base, name: scope.resolve(fn.base.name) }
-    : transformExpression(fn.base, scope) as Identifier | import("../ast/types.js").MemberExpression;
+    : transformExpression(fn.base, scope) as Identifier | import("../ast/types").MemberExpression;
   return { ...fn, base };
 }
 

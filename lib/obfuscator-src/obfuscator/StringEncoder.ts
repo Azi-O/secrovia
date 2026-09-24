@@ -6,8 +6,8 @@ import type {
   CallExpression,
   TableConstructor,
   TableField,
-} from "../ast/types.js";
-import type { SourceLocation } from "../tokens.js";
+} from "../ast/types";
+import type { SourceLocation } from "../tokens";
 
 function makeLoc(start: SourceLocation["start"], end: SourceLocation["end"]): SourceLocation {
   return { start, end };

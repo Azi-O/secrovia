@@ -1,7 +1,7 @@
-import { lex } from "../lexer/Lexer.js";
-import { parseWithErrors } from "../parser/Parser.js";
-import { printChunk } from "../obfuscator/Printer.js";
-import type { Chunk, Statement, LastStatement, Expression } from "../ast/types.js";
+import { lex } from "../lexer/Lexer";
+import { parseWithErrors } from "../parser/Parser";
+import { printChunk } from "../obfuscator/Printer";
+import type { Chunk, Statement, LastStatement, Expression } from "../ast/types";
 
 export interface ValidationError {
   message: string;

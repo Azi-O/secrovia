@@ -1,7 +1,7 @@
-import type { BytecodeChunk, Constant } from "./bytecode.js";
-import { Lexer } from "../lexer/Lexer.js";
-import { Parser } from "../parser/Parser.js";
-import { compile as compileAST } from "./Compiler.js";
+import type { BytecodeChunk, Constant } from "./bytecode";
+import { Lexer } from "../lexer/Lexer";
+import { Parser } from "../parser/Parser";
+import { compile as compileAST } from "./Compiler";
 
 let _rng: () => number = Math.random;
 

@@ -11,7 +11,7 @@ import type {
   ReturnType,
   GenericTypeListWithDefaults,
   Attribute,
-} from "../ast/types.js";
+} from "../ast/types";
 
 export function printChunk(chunk: Chunk): string {
   return chunk.body.map((s) => printStatement(s)).join("\n");

@@ -23,16 +23,17 @@ function AuthScreen({ onAuth }: { onAuth: () => void }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [message, setMessage] = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (mode === 'signup' && password !== confirm) return setMessage('Mật khẩu nhập lại không khớp')
     const email = `${username.trim().toLowerCase()}@secrovia.local`
-    const result = mode === 'login' ? await authClient.signIn.email({ email, password }) : await authClient.signUp.email({ email, password, name: username.trim() })
+    const result = mode === 'login' ? await authClient.signIn.email({ email, password, rememberMe }) : await authClient.signUp.email({ email, password, name: username.trim() })
     if (result.error) return setMessage('Tên tài khoản hoặc mật khẩu không hợp lệ')
     setMessage('')
     onAuth()
   }
-  return <main className="auth-page"><div className="auth-panel"><Brand /><div className="auth-heading"><p className="eyebrow">Protected code storage</p><h1>{mode === 'login' ? 'Welcome back.' : 'Create your account.'}</h1><p>{mode === 'login' ? 'Sign in to continue to your workspace.' : 'Keep every code link under your control.'}</p></div><div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>Sign Up</button></div><form onSubmit={submit} className="auth-form"><label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Enter your username" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required /></label>{mode === 'signup' && <label>Confirm password<input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat your password" required /></label>}{message && <p className="form-error">{message}</p>}<button className="primary-button" type="submit">{mode === 'login' ? 'Login' : 'Sign Up'}</button></form><p className="secure-note"><ShieldCheck size={14} /> Your code stays protected.</p></div></main>
+  return <main className="auth-page"><div className="auth-panel"><Brand /><div className="auth-heading"><p className="eyebrow">Protected code storage</p><h1>{mode === 'login' ? 'Welcome back.' : 'Create your account.'}</h1><p>{mode === 'login' ? 'Sign in to continue to your workspace.' : 'Keep every code link under your control.'}</p></div><div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>Sign Up</button></div><form onSubmit={submit} className="auth-form"><label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Enter your username" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required /></label>{mode === 'login' && <label className="remember-option"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this device</label>}{mode === 'signup' && <label>Confirm password<input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat your password" required /></label>}{message && <p className="form-error">{message}</p>}<button className="primary-button" type="submit">{mode === 'login' ? 'Login' : 'Sign Up'}</button></form><p className="secure-note"><ShieldCheck size={14} /> Your code stays protected.</p></div></main>
 }
 
 function Workspace() {

@@ -8,14 +8,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const accept = request.headers.get('accept') ?? ''
   const userAgent = request.headers.get('user-agent') ?? ''
   const isBrowserNavigation = fetchMode === 'navigate' || accept.includes('text/html')
-  const isHttpGetClient = /roblox|robloxstudio|httpget/i.test(userAgent)
+  const isHttpGetClient = /roblox|robloxstudio|httpget/i.test(userAgent) || (!isBrowserNavigation && !accept.includes('text/html'))
   if (isBrowserNavigation && !isHttpGetClient) return protectedResponse()
 
   const { name } = await params
   const file = await db.select().from(codeFile).where(eq(codeFile.name, decodeURIComponent(name))).limit(1)
   if (!file[0]) return new NextResponse('Not found', { status: 404 })
   await db.update(codeFile).set({ rawAccessCount: file[0].rawAccessCount + 1 }).where(eq(codeFile.id, file[0].id))
-  if (isHttpGetClient) await db.update(user).set({ viewRemainder: sql`(${user.viewRemainder} + 1) % 15`, tokenBalance: sql`${user.tokenBalance} + CASE WHEN ${user.viewRemainder} + 1 >= 15 THEN 1 ELSE 0 END` }).where(eq(user.id, file[0].userId))
+  if (isHttpGetClient) await db.update(user).set({ viewRemainder: sql`mod(${user.viewRemainder} + 1, 15)`, tokenBalance: sql`${user.tokenBalance} + floor((${user.viewRemainder} + 1) / 15)` }).where(eq(user.id, file[0].userId))
   return new NextResponse(file[0].content, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 }
 

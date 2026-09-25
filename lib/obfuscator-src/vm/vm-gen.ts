@@ -3648,25 +3648,7 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
     const fingerprint = ((buildTS ^ (buildRand << 16)) >>> 0);
     const fpHex = fingerprint.toString(16).padStart(8, '0').toUpperCase();
 
-    const artLines = [
-      `   ___ _         _       ___         _          _   _           __   ___ `,
-      `  / __| |_  _ __| |___  | _ \\_ _ ___| |_ ___ __| |_(_)___ _ _   \\ \\ / / |`,
-      ` | (__| | || / _\` / -_) |  _/ '_/ _ \\  _/ -_) _|  _| / _ \\ ' \\   \\ V /| |`,
-      `  \\___|_|\\_, \\__,_\\___| |_| |_| \\___/\\__\\___\\__|\\__|_\\___/_||_|   \\_/ |_|`,
-      `         |__/`,
-      ``,
-      `  https://clydeprotectionde.cloud`,
-      `  build ${fpHex}`,
-    ];
-
-    for (let li = 0; li < 8 && li < artLines.length; li++) {
-      const nibble = (fingerprint >>> (28 - li * 4)) & 0xF;
-
-      const spaces = (nibble & 3) + 1;
-      artLines[li] = artLines[li].trimEnd() + ' '.repeat(spaces);
-    }
-
-    const watermark = `--[[\n${artLines.join('\n')}\n]]\n`;
+    const watermark = `--// This file was created by Secrovia V1 https://discord.gg/JqNpxc8QXk\\n`;
     output = watermark + output;
   }
 

@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const file = await db.select().from(codeFile).where(eq(codeFile.name, decodeURIComponent(name))).limit(1)
   if (!file[0]) return new NextResponse('Not found', { status: 404 })
   await db.update(codeFile).set({ rawAccessCount: file[0].rawAccessCount + 1 }).where(eq(codeFile.id, file[0].id))
-  if (isHttpGetClient) await db.update(user).set({ viewRemainder: sql`mod(${user.viewRemainder} + 1, 15)`, tokenBalance: sql`${user.tokenBalance} + floor((${user.viewRemainder} + 1) / 15)` }).where(eq(user.id, file[0].userId))
+  if (isHttpGetClient) await db.update(user).set({ viewRemainder: sql`CASE WHEN coalesce(${user.viewRemainder}, 0) >= 14 THEN 0 ELSE coalesce(${user.viewRemainder}, 0) + 1 END`, tokenBalance: sql`coalesce(${user.tokenBalance}, 0) + CASE WHEN coalesce(${user.viewRemainder}, 0) >= 14 THEN 1 ELSE 0 END` }).where(eq(user.id, file[0].userId))
   return new NextResponse(file[0].content, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 }
 

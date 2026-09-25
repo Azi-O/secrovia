@@ -15,14 +15,14 @@ async function getUserId() {
 
 export async function getTokenBalance() {
   const userId = await getUserId()
-  const [account] = await db.select({ tokenBalance: user.tokenBalance, viewRemainder: user.viewRemainder }).from(user).where(eq(user.id, userId)).limit(1)
+  const [account] = await db.select({ tokenBalance: user.tokenBalance, viewRemainder: user.viewRemainder, tokenAwardedViews: user.tokenAwardedViews }).from(user).where(eq(user.id, userId)).limit(1)
   const [views] = await db.select({ total: sql<number>`coalesce(sum(${codeFile.rawAccessCount}), 0)` }).from(codeFile).where(eq(codeFile.userId, userId))
   const totalViews = Number(views?.total ?? 0)
-  const earnedTokens = Math.floor(totalViews / 15)
-  const remainder = totalViews % 15
-  if (earnedTokens > Number(account?.tokenBalance ?? 0) || remainder !== Number(account?.viewRemainder ?? 0)) {
-    const [synced] = await db.update(user).set({ tokenBalance: Math.max(Number(account?.tokenBalance ?? 0), earnedTokens), viewRemainder: remainder }).where(eq(user.id, userId)).returning({ tokenBalance: user.tokenBalance })
-    return Number(synced?.tokenBalance ?? earnedTokens)
+  const awardedViews = Number(account?.tokenAwardedViews ?? 0)
+  const newTokens = Math.floor(Math.max(0, totalViews - awardedViews) / 15)
+  if (newTokens > 0 || totalViews !== Number(account?.viewRemainder ?? 0)) {
+    const [synced] = await db.update(user).set({ tokenBalance: sql`coalesce(${user.tokenBalance}, 0) + ${newTokens}`, tokenAwardedViews: awardedViews + newTokens * 15, viewRemainder: totalViews % 15 }).where(eq(user.id, userId)).returning({ tokenBalance: user.tokenBalance })
+    return Number(synced?.tokenBalance ?? account?.tokenBalance ?? 0)
   }
   return Number(account?.tokenBalance ?? 0)
 }
@@ -30,10 +30,14 @@ export async function getTokenBalance() {
 export async function obfuscateCode(source: string, level: 'debug' | 'normal' | 'maximum') {
   const userId = await getUserId()
   if (!source.trim()) throw new Error('Code is required')
-  const output = obfuscateLuau(source, level)
   if (level === 'maximum') {
     const result = await db.update(user).set({ tokenBalance: sql`coalesce(${user.tokenBalance}, 0) - 1` }).where(sql`${user.id} = ${userId} AND coalesce(${user.tokenBalance}, 0) >= 1`).returning({ tokenBalance: user.tokenBalance })
     if (!result.length) throw new Error('You need 1 token for Maximum obfuscation')
   }
-  return output
+  try {
+    return obfuscateLuau(source, level)
+  } catch (error) {
+    if (level === 'maximum') await db.update(user).set({ tokenBalance: sql`coalesce(${user.tokenBalance}, 0) + 1` }).where(eq(user.id, userId))
+    throw error
+  }
 }

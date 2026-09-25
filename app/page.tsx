@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Eye, FileCode2, FilePenLine, Menu, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
-import { authClient } from '@/lib/auth-client'
+import { authClient, useSession } from '@/lib/auth-client'
 import { deleteAccount, deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
 import { getLeaderboard, getProfile, getProfileStats, updateProfile } from '@/app/actions/leaderboard'
 import { getTokenBalance, obfuscateCode } from '@/app/actions/obfuscator'
@@ -89,6 +89,8 @@ function Workspace() {
 }
 
 export default function Home() {
-  const [authenticated, setAuthenticated] = useState(false)
-  return authenticated ? <Workspace /> : <AuthScreen onAuth={() => setAuthenticated(true)} />
+  const session = useSession()
+  const authenticated = Boolean(session.data?.user)
+  if (session.isPending) return <main className="auth-page"><div className="auth-panel"><Brand /><p className="eyebrow">Loading session</p><h1>Welcome back.</h1></div></main>
+  return authenticated ? <Workspace /> : <AuthScreen onAuth={() => undefined} />
 }

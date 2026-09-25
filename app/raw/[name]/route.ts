@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { codeFile, user } from '@/lib/db/schema'
+import { codeFile } from '@/lib/db/schema'
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   const fetchMode = request.headers.get('sec-fetch-mode')
@@ -15,7 +15,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const file = await db.select().from(codeFile).where(eq(codeFile.name, decodeURIComponent(name))).limit(1)
   if (!file[0]) return new NextResponse('Not found', { status: 404 })
   await db.update(codeFile).set({ rawAccessCount: file[0].rawAccessCount + 1 }).where(eq(codeFile.id, file[0].id))
-  if (isHttpGetClient) await db.update(user).set({ viewRemainder: sql`CASE WHEN coalesce(${user.viewRemainder}, 0) >= 14 THEN 0 ELSE coalesce(${user.viewRemainder}, 0) + 1 END`, tokenBalance: sql`coalesce(${user.tokenBalance}, 0) + CASE WHEN coalesce(${user.viewRemainder}, 0) >= 14 THEN 1 ELSE 0 END` }).where(eq(user.id, file[0].userId))
   return new NextResponse(file[0].content, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } })
 }
 

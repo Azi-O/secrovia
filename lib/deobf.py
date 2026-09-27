@@ -8086,7 +8086,7 @@ class DeobfuscationPipeline:
         if vm == VMFingerprint.PSU or VMFingerprint.PSU in all_detected:
             src = PSUDecoder.decode(src)
 
-        if vm == VMFingerprint.WEAREDEVS or VMFingerprint.WEAREaredDevs in all_detected:
+        if vm == VMFingerprint.WEAREDEVS or VMFingerprint.WEAREDEVS in all_detected:
             src = WeAreDevsDecoder.decode(src)
 
         src = StringDecoder.decode_string_reversal(src)

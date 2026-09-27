@@ -72,7 +72,7 @@ function Workspace() {
     setDeobfuscating(true)
     setDeobfuscatorError('')
     try {
-      const response = await fetch('/api/deobfuscator', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: deobfuscatorInput }) })
+      const response = await fetch('/api/deobfuscator.py', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: deobfuscatorInput }) })
       const result = await response.json() as { code?: string; error?: string }
       if (!response.ok || !result.code) throw new Error(result.error ?? 'Deobfuscation failed')
       setDeobfuscatorOutput(result.code)

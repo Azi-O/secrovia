@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, Menu, ScanSearch, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
+import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, Menu, ScanSearch, ShieldCheck, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react'
 import { authClient, useSession } from '@/lib/auth-client'
 import { deleteAccount, deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
 import { getLeaderboard, getProfile, getProfileStats, updateProfile } from '@/app/actions/leaderboard'
@@ -35,7 +35,7 @@ function AmbientVideo() {
     </video>
     <div className="ambient-video-overlay" aria-hidden="true" />
     <button className="sound-toggle" type="button" onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? 'Tắt âm thanh nền' : 'Bật âm thanh nền'}>
-      {soundOn ? 'Sound on' : 'Sound off'}
+      {soundOn ? <Volume2 size={17} strokeWidth={2.2} /> : <VolumeX size={17} strokeWidth={2.2} />}
     </button>
   </>
 }

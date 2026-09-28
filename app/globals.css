@@ -10,7 +10,7 @@ html { background: var(--bg); scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); font-family: Arial, Helvetica, sans-serif; }
 .ambient-video { position: fixed; z-index: -3; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; opacity: .34; filter: saturate(.7) contrast(1.08) brightness(.62); }
 .ambient-video-overlay { position: fixed; z-index: -2; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 12%, rgba(24,24,27,.18), rgba(9,9,11,.78) 78%), linear-gradient(120deg, rgba(9,9,11,.58), rgba(9,9,11,.2) 48%, rgba(9,9,11,.65)); }
-  .sound-toggle { position: fixed; z-index: 3; right: 18px; bottom: 18px; padding: 9px 12px; color: #d8ff68; border: 1px solid rgba(216,255,104,.3); border-radius: 999px; background: rgba(12,12,14,.72); backdrop-filter: blur(12px); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .sound-toggle { position: fixed; z-index: 3; top: 18px; right: 18px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; color: #d8ff68; border: 1px solid rgba(216,255,104,.3); border-radius: 999px; background: rgba(12,12,14,.72); backdrop-filter: blur(12px); }
   .sound-toggle:hover { border-color: rgba(216,255,104,.72); background: rgba(26,26,29,.86); transform: translateY(-2px); }
   .sound-toggle[aria-pressed="true"] { color: #10110c; background: #d8ff68; }
 .auth-page, .workspace-page { isolation: isolate; }

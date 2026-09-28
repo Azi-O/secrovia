@@ -18,7 +18,26 @@ function Brand() {
 }
 
 function AmbientVideo() {
-  return <><video className="ambient-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true"><source src="https://files.catbox.moe/87eeqs.mp4" type="video/mp4" /></video><div className="ambient-video-overlay" aria-hidden="true" /></>
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [soundOn, setSoundOn] = useState(false)
+
+  function toggleSound() {
+    const video = videoRef.current
+    if (!video) return
+    video.muted = soundOn
+    setSoundOn(!soundOn)
+    void video.play().catch(() => undefined)
+  }
+
+  return <>
+    <video ref={videoRef} className="ambient-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true">
+      <source src="https://files.catbox.moe/87eeqs.mp4" type="video/mp4" />
+    </video>
+    <div className="ambient-video-overlay" aria-hidden="true" />
+    <button className="sound-toggle" type="button" onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? 'Tắt âm thanh nền' : 'Bật âm thanh nền'}>
+      {soundOn ? 'Sound on' : 'Sound off'}
+    </button>
+  </>
 }
 
 function AuthScreen({ onAuth }: { onAuth: () => void }) {

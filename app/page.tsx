@@ -21,20 +21,29 @@ function AmbientVideo() {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
-    const enableSound = () => {
+    const keepPlaying = () => {
       const video = videoRef.current
       if (!video) return
       video.muted = false
       void video.play().catch(() => undefined)
-      document.removeEventListener('pointerdown', enableSound)
-      document.removeEventListener('keydown', enableSound)
+    }
+    const resumeIfPaused = () => {
+      const video = videoRef.current
+      if (video && !video.ended) void video.play().catch(() => undefined)
     }
 
-    document.addEventListener('pointerdown', enableSound, { once: true })
-    document.addEventListener('keydown', enableSound, { once: true })
+    // A user gesture enables audio; keeping this in capture phase means clicks
+    // on buttons, cards, and editors cannot accidentally interrupt the backdrop.
+    document.addEventListener('pointerdown', keepPlaying, true)
+    document.addEventListener('keydown', keepPlaying, true)
+    document.addEventListener('visibilitychange', resumeIfPaused)
+    const video = videoRef.current
+    video?.addEventListener('pause', resumeIfPaused)
     return () => {
-      document.removeEventListener('pointerdown', enableSound)
-      document.removeEventListener('keydown', enableSound)
+      document.removeEventListener('pointerdown', keepPlaying, true)
+      document.removeEventListener('keydown', keepPlaying, true)
+      document.removeEventListener('visibilitychange', resumeIfPaused)
+      video?.removeEventListener('pause', resumeIfPaused)
     }
   }, [])
 

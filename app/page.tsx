@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, Menu, ScanSearch, ShieldCheck, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react'
+import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, Menu, ScanSearch, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
 import { authClient, useSession } from '@/lib/auth-client'
 import { deleteAccount, deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
 import { getLeaderboard, getProfile, getProfileStats, updateProfile } from '@/app/actions/leaderboard'
@@ -19,24 +19,30 @@ function Brand() {
 
 function AmbientVideo() {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [soundOn, setSoundOn] = useState(false)
 
-  function toggleSound() {
-    const video = videoRef.current
-    if (!video) return
-    video.muted = soundOn
-    setSoundOn(!soundOn)
-    void video.play().catch(() => undefined)
-  }
+  useEffect(() => {
+    const enableSound = () => {
+      const video = videoRef.current
+      if (!video) return
+      video.muted = false
+      void video.play().catch(() => undefined)
+      document.removeEventListener('pointerdown', enableSound)
+      document.removeEventListener('keydown', enableSound)
+    }
+
+    document.addEventListener('pointerdown', enableSound, { once: true })
+    document.addEventListener('keydown', enableSound, { once: true })
+    return () => {
+      document.removeEventListener('pointerdown', enableSound)
+      document.removeEventListener('keydown', enableSound)
+    }
+  }, [])
 
   return <>
     <video ref={videoRef} className="ambient-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true">
       <source src="https://files.catbox.moe/87eeqs.mp4" type="video/mp4" />
     </video>
     <div className="ambient-video-overlay" aria-hidden="true" />
-    <button className="sound-toggle" type="button" onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? 'Tắt âm thanh nền' : 'Bật âm thanh nền'}>
-      {soundOn ? <Volume2 size={17} strokeWidth={2.2} /> : <VolumeX size={17} strokeWidth={2.2} />}
-    </button>
   </>
 }
 

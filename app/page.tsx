@@ -49,7 +49,7 @@ function AmbientVideo() {
 
   return <>
     <video ref={videoRef} className="ambient-video" autoPlay muted loop playsInline preload="auto" aria-hidden="true">
-      <source src="https://files.catbox.moe/9r7yg2.mp4" type="video/mp4" />
+      <source src="https://files.catbox.moe/132d5k.mp4" type="video/mp4" />
     </video>
     <div className="ambient-video-overlay" aria-hidden="true" />
   </>

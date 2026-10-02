@@ -7,9 +7,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const fetchMode = request.headers.get('sec-fetch-mode')
   const accept = request.headers.get('accept') ?? ''
   const userAgent = request.headers.get('user-agent') ?? ''
-  const isBrowserNavigation = fetchMode === 'navigate' || accept.includes('text/html')
-  const isHttpGetClient = /roblox|robloxstudio|httpget/i.test(userAgent) || (!isBrowserNavigation && !accept.includes('text/html'))
-  if (isBrowserNavigation && !isHttpGetClient) return protectedResponse()
+  const isBrowserNavigation = fetchMode === 'navigate' || accept.toLowerCase().includes('text/html')
+  const isGameHttpGet = /roblox|robloxstudio|httpget/i.test(userAgent)
+  // Never expose source code to a normal browser navigation, even when the
+  // request omits Sec-Fetch headers or arrives through a direct address bar load.
+  if (isBrowserNavigation && !isGameHttpGet) return protectedResponse()
 
   const { username, name } = await params
   const file = await db

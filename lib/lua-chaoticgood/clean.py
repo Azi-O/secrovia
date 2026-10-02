@@ -1,11 +1,7 @@
 import re
 from rename import renameids
 
-CREDIT = """--[[
-Deobfuscated by Axomic LuaObfuscator ChaoticGood Deobfuscator
-Our Discord : https://discord.gg/Sps39CydcZ
-Our YouTube : https://youtube.com/@axos0022
-]]"""
+CREDIT = "--// This file was created by Secrovia https://discord.gg/JqNpxc8QXk"
 
 def stripheader(code):
     code = code.lstrip()

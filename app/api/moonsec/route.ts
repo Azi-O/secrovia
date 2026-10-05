@@ -19,10 +19,14 @@ export async function POST(request: Request) {
     const inputPath = path.join(directory, 'input.lua')
     const outputPath = path.join(directory, 'output.lua')
     await fs.writeFile(inputPath, code, 'utf8')
-    const output = new FullJSDeobfuscator(strength).deobfuscate(inputPath, outputPath)
-    await fs.rm(directory, { recursive: true, force: true })
-    return NextResponse.json({ code: `--// This file was created by Secrovia https://discord.gg/JqNpxc8QXk\n${output.trimStart()}` })
-  } catch {
-    return NextResponse.json({ error: 'MoonSec deobfuscation failed' }, { status: 422 })
+    try {
+      const output = new FullJSDeobfuscator(strength).deobfuscate(inputPath, outputPath)
+      return NextResponse.json({ code: `--// This file was created by Secrovia https://discord.gg/JqNpxc8QXk\n${output.trimStart()}` })
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined)
+    }
+  } catch (error) {
+    console.error('[v0] Moonsec deobfuscation failed', error)
+    return NextResponse.json({ error: 'MoonSec deobfuscation failed for this input' }, { status: 422 })
   }
 }

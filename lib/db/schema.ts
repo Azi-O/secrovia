@@ -3,6 +3,7 @@ import { boolean, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
+  displayName: text('displayName').notNull().default(''),
   email: text('email').notNull().unique(),
   emailVerified: boolean('emailVerified').notNull().default(false),
   image: text('image'),
@@ -64,6 +65,31 @@ export const siteStats = pgTable('site_stats', {
   id: integer('id').primaryKey().default(1),
   visitCount: integer('visitCount').notNull().default(0),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+})
+
+export const shareSource = pgTable('share_source', {
+  id: text('id').primaryKey(),
+  ownerId: text('ownerId').notNull(),
+  displayName: text('displayName').notNull(),
+  description: text('description').notNull().default(''),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+})
+
+export const shareMessage = pgTable('share_message', {
+  id: text('id').primaryKey(),
+  sourceId: text('sourceId').notNull(),
+  authorId: text('authorId').notNull(),
+  content: text('content').notNull().default(''),
+  fileName: text('fileName'),
+  fileContent: text('fileContent'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+})
+
+export const shareMember = pgTable('share_member', {
+  id: text('id').primaryKey(),
+  sourceId: text('sourceId').notNull(),
+  userId: text('userId').notNull(),
+  joinedAt: timestamp('joinedAt').notNull().defaultNow(),
 })
 
 export type CodeFile = typeof codeFile.$inferSelect

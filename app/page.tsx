@@ -141,7 +141,7 @@ function Workspace() {
       setDeobfuscating(false)
     }
   }
-  async function copyFullRawUrl(name: string) { const rawUrl = `https://secrovia.vercel.app/raw/${encodeURIComponent(profileName)}/${encodeURIComponent(name)}`; await navigator.clipboard?.writeText(rawUrl) }
+  async function copyFullRawUrl(name: string) { const rawUrl = `https://secrovia.vercel.app/raw/${encodeURIComponent(username)}/${encodeURIComponent(name)}`; await navigator.clipboard?.writeText(rawUrl) }
   async function saveFile() { if (!fileName.trim() || !code.trim()) return; await saveCodeFile(fileName, code); setFiles((current) => { const name = fileName.trim(); const existing = current.some((file) => file.name === name); return existing ? current.map((file) => file.name === name ? { ...file, content: code } : file) : [{ name, content: code, accesses: 0 }, ...current] }) }
   async function runObfuscator() { if (!code.trim() || obfuscating) return; setObfuscating(true); setObfuscatorMessage(''); try { const output = await obfuscateCode(code, obfuscatorLevel); setCode(output); if (obfuscatorLevel === 'maximum') setTokenBalance(await getTokenBalance()); setObfuscatorMessage('Obfuscation complete') } catch (error) { setObfuscatorMessage(error instanceof Error ? error.message : 'Obfuscation failed') } finally { setObfuscating(false) } }
   function editFile(file: FileItem) { setFileName(file.name); setCode(file.content); window.scrollTo({ top: 0, behavior: 'smooth' }) }

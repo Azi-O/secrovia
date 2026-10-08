@@ -15,7 +15,7 @@ export async function getStatus() {
 }
 
 export async function getLeaderboard() {
-  return db.select({ name: user.name, image: user.image, accesses: sql<number>`coalesce(sum(${codeFile.rawAccessCount}), 0)` }).from(user).leftJoin(codeFile, eq(codeFile.userId, user.id)).groupBy(user.id).orderBy(desc(sql`coalesce(sum(${codeFile.rawAccessCount}), 0)`)).limit(25)
+  return db.select({ name: sql<string>`coalesce(nullif(${user.displayName}, ''), ${user.name})`, image: user.image, accesses: sql<number>`coalesce(sum(${codeFile.rawAccessCount}), 0)` }).from(user).leftJoin(codeFile, eq(codeFile.userId, user.id)).groupBy(user.id).orderBy(desc(sql`coalesce(sum(${codeFile.rawAccessCount}), 0)`)).limit(25)
 }
 
 async function getCurrentUser() {
@@ -26,8 +26,8 @@ async function getCurrentUser() {
 
 export async function getProfile() {
   const userId = await getCurrentUser()
-  const result = await db.select({ name: user.name, image: user.image }).from(user).where(eq(user.id, userId)).limit(1)
-  return result[0] ?? { name: '', image: null }
+  const result = await db.select({ username: user.name, displayName: user.displayName, image: user.image }).from(user).where(eq(user.id, userId)).limit(1)
+  return result[0] ?? { username: '', displayName: '', image: null }
 }
 
 export async function getProfileStats() {
@@ -41,12 +41,12 @@ export async function getAdminStats() {
   return { fileCount: Number(result[0]?.fileCount ?? 0), totalAccesses: Number(result[0]?.totalAccesses ?? 0) }
 }
 
-export async function updateProfile(name: string, image?: string | null) {
+export async function updateProfile(displayName: string, image?: string | null) {
   const userId = await getCurrentUser()
-  const nextName = name.trim().slice(0, 80)
-  if (!nextName) throw new Error('Name is required')
-  const values: { name: string; updatedAt: Date; image?: string | null } = { name: nextName, updatedAt: new Date() }
+  const nextDisplayName = displayName.trim().slice(0, 80)
+  if (!nextDisplayName) throw new Error('Display name is required')
+  const values: { displayName: string; updatedAt: Date; image?: string | null } = { displayName: nextDisplayName, updatedAt: new Date() }
   if (image !== undefined) values.image = image
   await db.update(user).set(values).where(eq(user.id, userId))
-  return { name: nextName, image: image === undefined ? undefined : image ?? null }
+  return { displayName: nextDisplayName, image: image === undefined ? undefined : image ?? null }
 }

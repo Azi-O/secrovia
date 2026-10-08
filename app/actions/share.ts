@@ -37,7 +37,7 @@ export async function joinShareSource(sourceId: string) {
 
 export async function listShareMessages(sourceId: string) {
   await currentUserId()
-  return db.select({ id: shareMessage.id, content: shareMessage.content, fileName: shareMessage.fileName, fileContent: shareMessage.fileContent, createdAt: shareMessage.createdAt, authorName: user.displayName }).from(shareMessage).innerJoin(user, eq(shareMessage.authorId, user.id)).where(eq(shareMessage.sourceId, sourceId)).orderBy(shareMessage.createdAt)
+  return db.select({ id: shareMessage.id, content: shareMessage.content, fileName: shareMessage.fileName, fileContent: shareMessage.fileContent, createdAt: shareMessage.createdAt, authorName: user.displayName, authorImage: user.image }).from(shareMessage).innerJoin(user, eq(shareMessage.authorId, user.id)).where(eq(shareMessage.sourceId, sourceId)).orderBy(shareMessage.createdAt)
 }
 
 export async function createShareMessage(sourceId: string, content: string, fileName?: string, fileContent?: string) {

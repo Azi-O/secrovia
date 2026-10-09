@@ -20,9 +20,10 @@ export async function listShareSources() {
   return [...owned, ...joined.map((row) => row.source)].filter((source, index, all) => all.findIndex((item) => item.id === source.id) === index)
 }
 
-export async function createShareSource(displayName: string, description: string) {
+export async function createShareSource(displayName: string, description: string, imageData?: string | null) {
   const ownerId = await currentUserId()
-  const source = { id: randomUUID(), ownerId, displayName: displayName.trim().slice(0, 80), description: description.trim().slice(0, 1000), createdAt: new Date() }
+  const safeImage = imageData?.startsWith('data:image/') ? imageData.slice(0, 2_000_000) : null
+  const source = { id: randomUUID(), ownerId, displayName: displayName.trim().slice(0, 80), description: description.trim().slice(0, 1000), imageData: safeImage, createdAt: new Date() }
   await db.insert(shareSource).values(source)
   await db.insert(shareMember).values({ id: randomUUID(), sourceId: source.id, userId: ownerId })
   return source

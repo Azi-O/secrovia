@@ -72,6 +72,7 @@ export const shareSource = pgTable('share_source', {
   ownerId: text('ownerId').notNull(),
   displayName: text('displayName').notNull(),
   description: text('description').notNull().default(''),
+  imageData: text('imageData'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
 })
 

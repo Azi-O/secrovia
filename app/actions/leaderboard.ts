@@ -26,8 +26,8 @@ async function getCurrentUser() {
 
 export async function getProfile() {
   const userId = await getCurrentUser()
-  const result = await db.select({ username: user.name, displayName: user.displayName, image: user.image }).from(user).where(eq(user.id, userId)).limit(1)
-  return result[0] ?? { username: '', displayName: '', image: null }
+  const result = await db.select({ id: user.id, username: user.name, displayName: user.displayName, image: user.image }).from(user).where(eq(user.id, userId)).limit(1)
+  return result[0] ?? { id: '', username: '', displayName: '', image: null }
 }
 
 export async function getProfileStats() {

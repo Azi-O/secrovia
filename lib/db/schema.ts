@@ -93,4 +93,8 @@ export const shareMember = pgTable('share_member', {
   joinedAt: timestamp('joinedAt').notNull().defaultNow(),
 })
 
+export const groupChat = pgTable('group_chat', { id: text('id').primaryKey(), ownerId: text('ownerId').notNull(), name: text('name').notNull(), imageData: text('imageData'), createdAt: timestamp('createdAt').notNull().defaultNow() })
+export const groupMessage = pgTable('group_message', { id: text('id').primaryKey(), groupId: text('groupId').notNull(), authorId: text('authorId').notNull(), content: text('content').notNull().default(''), fileName: text('fileName'), fileContent: text('fileContent'), createdAt: timestamp('createdAt').notNull().defaultNow() })
+export const groupMember = pgTable('group_member', { id: text('id').primaryKey(), groupId: text('groupId').notNull(), userId: text('userId').notNull(), joinedAt: timestamp('joinedAt').notNull().defaultNow() })
+
 export type CodeFile = typeof codeFile.$inferSelect

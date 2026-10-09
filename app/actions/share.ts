@@ -1,7 +1,7 @@
 'use server'
 
 import { randomUUID } from 'crypto'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
@@ -40,6 +40,9 @@ export async function listShareMessages(sourceId: string) {
   await currentUserId()
   return db.select({ id: shareMessage.id, content: shareMessage.content, fileName: shareMessage.fileName, fileContent: shareMessage.fileContent, createdAt: shareMessage.createdAt, authorName: user.displayName, authorImage: user.image }).from(shareMessage).innerJoin(user, eq(shareMessage.authorId, user.id)).where(eq(shareMessage.sourceId, sourceId)).orderBy(shareMessage.createdAt)
 }
+
+export async function updateShareSource(id: string, description: string, imageData?: string | null) { const ownerId = await currentUserId(); await db.update(shareSource).set({ description: description.trim().slice(0, 1000), imageData: imageData?.startsWith('data:image/') ? imageData.slice(0, 2_000_000) : imageData ?? null }).where(and(eq(shareSource.id, id), eq(shareSource.ownerId, ownerId))) }
+export async function deleteShareSource(id: string) { const ownerId = await currentUserId(); await db.delete(shareMessage).where(eq(shareMessage.sourceId, id)); await db.delete(shareMember).where(eq(shareMember.sourceId, id)); await db.delete(shareSource).where(and(eq(shareSource.id, id), eq(shareSource.ownerId, ownerId))) }
 
 export async function createShareMessage(sourceId: string, content: string, fileName?: string, fileContent?: string) {
   const authorId = await currentUserId()

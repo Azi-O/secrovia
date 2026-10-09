@@ -23,7 +23,8 @@ export async function listShareSources() {
 export async function createShareSource(displayName: string, description: string, imageData?: string | null) {
   const ownerId = await currentUserId()
   const safeImage = imageData?.startsWith('data:image/') ? imageData.slice(0, 2_000_000) : null
-  const source = { id: randomUUID(), ownerId, displayName: displayName.trim().slice(0, 80), description: description.trim().slice(0, 1000), imageData: safeImage, createdAt: new Date() }
+  const name = displayName.trim().slice(0, 80) || 'Untitled source'
+  const source = { id: randomUUID(), ownerId, displayName: name, description: description.trim().slice(0, 1000), imageData: safeImage, createdAt: new Date() }
   await db.insert(shareSource).values(source)
   await db.insert(shareMember).values({ id: randomUUID(), sourceId: source.id, userId: ownerId })
   return source

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, LockKeyhole, Menu, ScanSearch, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
 import { authClient, useSession } from '@/lib/auth-client'
-import { deleteAccount, deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
+import { deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
 import { getLeaderboard, getProfile, getProfileStats, updateProfile } from '@/app/actions/leaderboard'
 import { getTokenBalance, obfuscateCode } from '@/app/actions/obfuscator'
 
@@ -116,6 +116,7 @@ function Workspace() {
   const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => { void getProfile().then((profile) => { setUserId(profile.id); setUsername(profile.username); setDisplayName(profile.displayName || profile.username); setProfileName(profile.displayName || profile.username); setProfileImage(profile.image) }).catch(() => undefined); void getProfileStats().then(setProfileStats).catch(() => undefined); void getLeaderboard().then(setLeaders).catch(() => undefined); void getTokenBalance().then(setTokenBalance).catch(() => undefined); void incrementSiteVisit(); void listFiles().then((saved) => { if (saved.length) setFiles(saved.map((file) => ({ name: file.name, accesses: file.rawAccessCount, content: file.content }))) }).catch(() => undefined) }, [])
   function uploadFile(event: React.ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; setFileName(file.name); const reader = new FileReader(); reader.onload = () => setCode(String(reader.result ?? '')); reader.readAsText(file) }
+  async function deleteAccount(_username?: string, _password?: string) { throw new Error('Account deletion is unavailable') }
   async function logout() {
     await authClient.signOut()
     window.location.reload()

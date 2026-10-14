@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import './auth-overhaul.css'
+import './workspace-overhaul.css'
 import { ArrowRight, Eye, FileCode2, FilePenLine, FolderOpen, LockKeyhole, Menu, ScanSearch, ShieldCheck, Trash2, Upload, X } from 'lucide-react'
 import { authClient, useSession } from '@/lib/auth-client'
 import { deleteCodeFile, incrementSiteVisit, listFiles, saveCodeFile } from '@/app/actions/files'
@@ -62,16 +64,22 @@ function AuthScreen({ onAuth }: { onAuth: () => void }) {
   const [confirm, setConfirm] = useState('')
   const [message, setMessage] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   async function submit(event: React.FormEvent) {
     event.preventDefault()
+    if (isSubmitting) return
     if (mode === 'signup' && password !== confirm) return setMessage('Mật khẩu nhập lại không khớp')
     const email = `${username.trim().toLowerCase()}@secrovia.local`
+    setIsSubmitting(true)
     const result = mode === 'login' ? await authClient.signIn.email({ email, password, rememberMe }) : await authClient.signUp.email({ email, password, name: username.trim() })
+    setIsSubmitting(false)
     if (result.error) return setMessage('Tên tài khoản hoặc mật khẩu không hợp lệ')
     setMessage('')
     onAuth()
   }
-  return <main className="auth-page"><AmbientVideo /><div className="auth-panel"><Brand /><div className="auth-heading"><p className="eyebrow">Protected code storage</p><h1>{mode === 'login' ? 'Welcome back.' : 'Create your account.'}</h1><p>{mode === 'login' ? 'Sign in to continue to your workspace.' : 'Keep every code link under your control.'}</p></div><div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button><button className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>Sign Up</button></div><form onSubmit={submit} className="auth-form"><label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Enter your username" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required /></label>{mode === 'login' && <label className="remember-option"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this device</label>}{mode === 'signup' && <label>Confirm password<input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Repeat your password" required /></label>}{message && <p className="form-error">{message}</p>}<button className="primary-button" type="submit">{mode === 'login' ? 'Login' : 'Sign Up'}</button></form><p className="secure-note"><ShieldCheck size={14} /> Your code stays protected.</p></div></main>
+  const switchMode = (nextMode: 'login' | 'signup') => { if (nextMode !== mode) { setMessage(''); setMode(nextMode) } }
+  return <main className={`auth-page auth-${mode}`}><AmbientVideo /><div className="auth-particles" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} />)}</div><div className="auth-panel"><div className="auth-panel-split auth-panel-split-left" aria-hidden="true" /><div className="auth-panel-split auth-panel-split-right" aria-hidden="true" /><div className="auth-panel-content"><Brand /><div className="auth-heading"><p className="eyebrow">Protected code storage</p><h1 key={mode}>{mode === 'login' ? 'Welcome back.' : 'Create your account.'}</h1><p key={`${mode}-description`}>{mode === 'login' ? 'Sign in to continue to your workspace.' : 'Keep every code link under your control.'}</p></div><div className="auth-tabs" role="tablist" aria-label="Authentication mode"><span className={`auth-tab-indicator ${mode}`} aria-hidden="true" /><button role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>Login</button><button role="tab" aria-selected={mode === 'signup'} className={mode === 'signup' ? 'active' : ''} onClick={() => switchMode('signup')}>Sign Up</button></div><form onSubmit={submit} className="auth-form"><label className="floating-field"><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder=" " autoComplete="username" required /><span>Username</span></label><label className="floating-field password-field"><input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder=" " autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required /><span>Password</span><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((visible) => !visible)}><Eye size={16} /></button></label>{mode === 'login' && <label className="remember-option"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this device</label>}{mode === 'signup' && <label className="floating-field"><input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder=" " autoComplete="new-password" required /><span>Confirm password</span></label>}{message && <p className="form-error" role="alert">{message}</p>}<button className="primary-button auth-submit" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Authenticating...' : mode === 'login' ? 'Login' : 'Sign Up'}<ArrowRight size={16} /></button></form><p className="secure-note"><ShieldCheck size={14} /> Your code stays protected.</p></div></div></main>
 }
 
 function AccountMenu({ profileName, profileImage, tokenBalance = 0, menuOpen, setMenuOpen, onProfile, onLogout }: { profileName: string; profileImage?: string | null; tokenBalance?: number; menuOpen: boolean; setMenuOpen: (open: boolean) => void; onProfile: () => void; onLogout: () => void }) {

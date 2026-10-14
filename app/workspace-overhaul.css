@@ -1,0 +1,12 @@
+.topbar { position: sticky; top: 0; z-index: 5; background: rgba(9,9,11,.72); border-bottom-color: rgba(216,255,104,.12); backdrop-filter: blur(22px) saturate(1.15); }
+.workspace-page .topbar .brand-mark { filter: drop-shadow(0 0 12px rgba(216,255,104,.2)); }
+.token-menu-item strong { color: #d8ff68; text-shadow: 0 0 12px rgba(216,255,104,.45); }
+.editor-card, .file-row, .dashboard-card, .deobfuscator-option, .leaderboard-card, .profile-settings-card { border-color: rgba(255,255,255,.09); background: linear-gradient(145deg, rgba(25,25,29,.86), rgba(12,12,14,.82)); backdrop-filter: blur(16px); }
+.file-row { position: relative; overflow: hidden; }
+.file-row::after { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; background: linear-gradient(90deg, transparent, rgba(216,255,104,.07), transparent); transform: translateX(-100%); transition: opacity .25s ease, transform .6s ease; }
+.file-row:hover::after { opacity: 1; transform: translateX(100%); }
+.file-row:hover { border-color: rgba(216,255,104,.35); transform: translateX(4px); }
+.code-editor { border-color: rgba(216,255,104,.11); background: rgba(7,7,9,.7); }
+.code-editor:focus { border-color: rgba(216,255,104,.55); box-shadow: 0 0 0 3px rgba(216,255,104,.08), 0 0 28px rgba(216,255,104,.08); }
+.obfuscator-select:focus { border-color: #d8ff68; box-shadow: 0 0 0 3px rgba(216,255,104,.1); }
+@media (max-width: 620px) { .topbar { min-height: 64px; height: auto; padding: 12px 18px; } .topbar-right > span:not(.online-dot) { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }

@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { ArrowRight, BookOpen, Copy, KeyRound, RefreshCw } from 'lucide-react'
-import { apiServices, resetApiToken } from '@/app/actions/api-tokens'
+import { resetApiToken } from '@/app/actions/api-tokens'
+import { apiServices, type ApiServiceKey } from '@/lib/api-services'
 
-type ServiceKey = keyof typeof apiServices
+type ServiceKey = ApiServiceKey
 
 export function ApiPanel({ service, token, onToken }: { service: ServiceKey; token: string | null; onToken: (token: string) => void }) {
   const [busy, setBusy] = useState(false)

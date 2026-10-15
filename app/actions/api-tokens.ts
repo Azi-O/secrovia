@@ -6,12 +6,7 @@ import { headers } from 'next/headers'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { user } from '@/lib/db/schema'
-
-export const apiServices = {
-  obfuscator: { label: 'Obfuscator', path: '/api/v1/obfuscator' },
-  multiDeobfuscator: { label: 'Multi Deobfuscator', path: '/api/v1/deobfuscator/multi' },
-  chaoticGod: { label: 'Deobfuscator LuaObfuscator Chaotic God', path: '/api/v1/deobfuscator/chaotic-god' },
-} as const
+import type { ApiServiceKey } from '@/lib/api-services'
 
 async function getUserId() {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -27,7 +22,7 @@ export async function getApiTokens() {
   try { return JSON.parse(record[0]?.apiTokens ?? '{}') as Record<string, string> } catch { return {} }
 }
 
-export async function resetApiToken(service: keyof typeof apiServices) {
+export async function resetApiToken(service: ApiServiceKey) {
   const userId = await getUserId()
   const record = await db.select({ apiTokens: user.apiTokens }).from(user).where(eq(user.id, userId)).limit(1)
   let tokens: Record<string, string> = {}
@@ -37,7 +32,7 @@ export async function resetApiToken(service: keyof typeof apiServices) {
   return tokens[service]
 }
 
-export async function getApiToken(service: keyof typeof apiServices) {
+export async function getApiToken(service: ApiServiceKey) {
   const tokens = await getApiTokens()
   return tokens[service] ?? null
 }

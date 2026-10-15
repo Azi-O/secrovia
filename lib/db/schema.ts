@@ -9,6 +9,7 @@ export const user = pgTable('user', {
   image: text('image'),
   username: text('username'),
   tokenBalance: integer('tokenBalance').notNull().default(0),
+  apiTokens: text('apiTokens').notNull().default('{}'),
   viewRemainder: integer('viewRemainder').notNull().default(0),
   tokenAwardedViews: integer('tokenAwardedViews').notNull().default(0),
   createdAt: timestamp('createdAt').notNull().defaultNow(),

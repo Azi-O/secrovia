@@ -13,6 +13,11 @@
 .api-token-heading code { color: #d9f99d; font-size: 14px; overflow-wrap: anywhere; }
 .api-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .api-guide { margin-top: 16px; }
+.api-command-list { display: grid; gap: 8px; margin: 14px 0; }
+.api-command-list div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(255,255,255,.03); }
+.api-command-list code { color: #d9f99d; font-weight: 700; }
+.api-command-list span { color: var(--muted); font-size: 12px; text-align: right; }
+@media (max-width: 640px) { .api-command-list div { display: grid; gap: 4px; } .api-command-list span { text-align: left; } }
 .api-guide-title { display: flex; align-items: center; gap: 9px; color: #d9f99d; }
 .api-guide p { color: var(--muted); line-height: 1.6; }
 .api-guide pre { overflow-x: auto; padding: 16px; border: 1px solid rgba(163,230,53,.18); border-radius: 12px; color: #d9f99d; background: #090a08; font-size: 12px; line-height: 1.65; }

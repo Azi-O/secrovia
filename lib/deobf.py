@@ -1,3 +1,4 @@
+
 import re
 import sys
 import os
@@ -22,7 +23,7 @@ import shutil
 from typing import Optional, Dict, List, Tuple, Any, Union, Callable, Set
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 from functools import reduce
 
 try:
@@ -167,6 +168,1935 @@ class BracketMatcher:
         return -1
 
 
+def _upgrade_junk_code_eliminator(src: str) -> str:
+    for _ in range(15):
+        prev = src
+        src = _fold_consts_deep(src)
+        src = _remove_self_assigns(src)
+        src = _remove_nil_stmts(src)
+        src = _remove_dead_locals_taint(src)
+        src = _remove_never_true_blocks(src)
+        src = _remove_always_true_blocks(src)
+        src = _remove_empty_fns(src)
+        src = _remove_dead_loops(src)
+        src = _remove_double_neg(src)
+        src = _remove_noop_arith(src)
+        src = _remove_empty_dos(src)
+        src = re.sub(r'local\s+(\w+)\s*=\s*\1\s*;?\s*\n?', '', src)
+        src = re.sub(r'(\w+)\s*=\s*\1\s*\+\s*0\b', r'\1', src)
+        src = re.sub(r'(\w+)\s*=\s*\1\s*-\s*0\b', r'\1', src)
+        src = re.sub(r'(\w+)\s*=\s*\1\s*\*\s*1\b', r'\1', src)
+        src = re.sub(r'(\w+)\s*=\s*\1\s*/\s*1\b', r'\1', src)
+        src = re.sub(r'if\s+true\s+then\s*(.*?)\s*end', r'\1', src, flags=re.DOTALL)
+        src = re.sub(r'if\s+not\s+false\s+then\s*(.*?)\s*end', r'\1', src, flags=re.DOTALL)
+        src = re.sub(r'do\s+local\s+[^\n]+\s+end', '', src)
+        src = re.sub(r';\s*\n', '\n', src)
+        if src == prev:
+            break
+    return src
+
+
+def _fold_consts_deep(src: str) -> str:
+    OPS = {'+': lambda a, b: a + b, '-': lambda a, b: a - b,
+           '*': lambda a, b: a * b, '//': lambda a, b: a // b if b else None,
+           '%': lambda a, b: a % b if b else None}
+
+    def repl(m):
+        a_s, op, b_s = m.group(1), m.group(2), m.group(3)
+        try:
+            a, b = int(a_s), int(b_s)
+            if op in OPS:
+                v = OPS[op](a, b)
+                if v is not None and abs(v) < 2 ** 32:
+                    return str(v)
+        except Exception:
+            pass
+        return m.group(0)
+    for _ in range(10):
+        prev = src
+        src = re.sub(r'(?<![.\w])(-?\d+)\s*(\+|-|\*|//|%)\s*(-?\d+)(?![.\w])', repl, src)
+        src = re.sub(r'\((\s*-?\d+\s*)\)', lambda m: m.group(1).strip()
+                     if re.fullmatch(r'\s*-?\d+\s*', m.group(1)) else m.group(0), src)
+        if src == prev:
+            break
+    return src
+
+
+def _remove_self_assigns(src: str) -> str:
+    src = re.sub(r'^\s*(\w+)\s*=\s*\1\s*;?\s*\n', '', src, flags=re.MULTILINE)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*;', '', src)
+    return src
+
+
+def _remove_nil_stmts(src: str) -> str:
+    src = re.sub(r'^\s*local\s+\w+\s*=\s*nil\s*;?\s*\n', '', src, flags=re.MULTILINE)
+    src = re.sub(r'^\s*local\s+\w+\s*=\s*function\s*\([^)]*\)\s*\n?\s*end\s*;?\s*\n', '', src, flags=re.MULTILINE)
+    return src
+
+
+def _remove_dead_locals_taint(src: str) -> str:
+    for _ in range(5):
+        decls = list(re.finditer(r'local\s+(\w+)\s*=\s*[^\n;]+', src))
+        changed = False
+        for m in reversed(decls):
+            name = m.group(1)
+            if name in ('_', '__') or name in ('true', 'false', 'nil'):
+                continue
+            rest = src[m.end():]
+            uses = len(re.findall(r'\b' + re.escape(name) + r'\b', rest))
+            if uses == 0:
+                end = m.end()
+                if end < len(src) and src[end] == '\n':
+                    end += 1
+                src = src[:m.start()] + src[end:]
+                changed = True
+        if not changed:
+            break
+    return src
+
+
+def _remove_never_true_blocks(src: str) -> str:
+    pats = [
+        r'if\s+false\s+then[\s\S]*?\bend\b',
+        r'if\s+nil\s+then[\s\S]*?\bend\b',
+        r'if\s+0\s*==\s*1\s+then[\s\S]*?\bend\b',
+        r'if\s+1\s*==\s*0\s+then[\s\S]*?\bend\b',
+        r'if\s+not\s+true\s+then[\s\S]*?\bend\b',
+        r'if\s+\(\s*false\s*\)\s+then[\s\S]*?\bend\b',
+        r'if\s+\(\s*nil\s*\)\s+then[\s\S]*?\bend\b',
+        r'if\s+0\s+then[\s\S]*?\bend\b',
+        r'while\s+false\s+do[\s\S]*?\bend\b',
+        r'while\s+nil\s+do[\s\S]*?\bend\b',
+        r'for\s+\w+\s*=\s*1\s*,\s*0\s+do[\s\S]*?\bend\b',
+    ]
+    for p in pats:
+        src = re.sub(p, '', src, flags=re.DOTALL)
+    return src
+
+
+def _remove_always_true_blocks(src: str) -> str:
+    pats = [
+        r'if\s+true\s+then([\s\S]*?)\bend\b',
+        r'if\s+1\s*==\s*1\s+then([\s\S]*?)\bend\b',
+        r'if\s+not\s+nil\s+then([\s\S]*?)\bend\b',
+        r'if\s+not\s+false\s+then([\s\S]*?)\bend\b',
+        r'if\s+\(\s*true\s*\)\s+then([\s\S]*?)\bend\b',
+    ]
+    for p in pats:
+        src = re.sub(p, r'\1', src, flags=re.DOTALL)
+    return src
+
+
+def _remove_empty_fns(src: str) -> str:
+    src = re.sub(r'local\s+function\s+\w+\s*\(\s*\)\s*\n?\s*end\s*\n?', '', src)
+    src = re.sub(r'local\s+\w+\s*=\s*function\s*\([^)]*\)\s*\n?\s*end\s*\n?', '', src)
+    return src
+
+
+def _remove_dead_loops(src: str) -> str:
+    src = re.sub(r'for\s+\w+\s*=\s*1\s*,\s*-1\s+do[\s\S]*?\bend\b', '', src, flags=re.DOTALL)
+    src = re.sub(
+        r'repeat\s+local\s+\w+\s*=\s*nil\s*;?\s*local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;?\s*local\s+\w+\s*=\s*nil\s*;?',
+        'repeat ', src)
+    return src
+
+
+def _remove_double_neg(src: str) -> str:
+    src = re.sub(r'not\s+not\s+(\w+)', r'\1', src)
+    src = re.sub(r'not\s+\(\s*not\s+(\w+)\s*\)', r'\1', src)
+    return src
+
+
+def _remove_noop_arith(src: str) -> str:
+    src = re.sub(r'(\w+)\s*=\s*\1\s*\+\s*0\b(?!\d)', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*-\s*0\b(?!\d)', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*\*\s*1\b(?!\d)', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*\/\s*1\b(?!\d)', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*\^\s*1\b(?!\d)', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*and\s*true\b', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*or\s*false\b', r'\1 = \1', src)
+    src = re.sub(r'(\w+)\s*=\s*\1\s*\.\.\s*["\']["\']', r'\1 = \1', src)
+    return src
+
+
+def _remove_empty_dos(src: str) -> str:
+    src = re.sub(r'\bdo\s+end\b', '', src)
+    src = re.sub(r'\bdo\s+(local\s+[^\n]+)\s+end\b', r'\1', src)
+    return src
+
+
+def upgrade_vm_handler_classify(text: str) -> Tuple[Optional[str], float, int]:
+    pat_sem, pat_conf, pat_eff = _classify_by_patterns(text)
+    if pat_conf >= 0.97:
+        return pat_sem, pat_conf, pat_eff
+
+    df_sem, df_conf = _classify_by_dataflow(text)
+    struct_sem, struct_conf = _classify_by_structure(text)
+
+    candidates: Dict[str, float] = {}
+    for sem, conf in [(pat_sem, pat_conf), (df_sem, df_conf), (struct_sem, struct_conf)]:
+        if sem:
+            candidates[sem] = max(candidates.get(sem, 0.0), conf)
+
+    if not candidates:
+        return None, 0.0, 0
+
+    best_sem = max(candidates, key=lambda s: candidates[s])
+    best_conf = candidates[best_sem]
+
+    agreement = sum(1 for s, c in [(pat_sem, pat_conf), (df_sem, df_conf), (struct_sem, struct_conf)]
+                    if s == best_sem and c > 0.55)
+    if agreement >= 2:
+        best_conf = min(0.99, best_conf + 0.04 * (agreement - 1))
+
+    eff = pat_eff if pat_sem == best_sem else 0
+    return best_sem, best_conf, eff
+
+
+def _classify_by_structure(text: str) -> Tuple[Optional[str], float]:
+    assigns_to_a = bool(re.search(r'\[\s*A\s*\]\s*=|Inst\[OP_A\]\s*\]\s*=', text))
+    reads_from_bc = bool(re.search(r'\[\s*[BC]\s*\]|Inst\[OP_[BC]\]', text)) or bool(re.search(r'\bRK\s*\(', text))
+    has_rk_b = bool(re.search(r'RK\s*\(\s*B\s*\)|Inst\[OP_B\].*Const', text))
+    has_rk_c = bool(re.search(r'RK\s*\(\s*C\s*\)|Inst\[OP_C\].*Const', text))
+    has_sbx = bool(re.search(r'\bsBx\b|\bSBx\b|Inst\[OP_B\]', text))
+    has_bx = bool(re.search(r'\bBx\b|Inst\[OP_B\]', text))
+    has_pc_mod = bool(
+        re.search(r'(?:PC|pc|IP|ip|InstrPoint)\s*[+\-]=|(?:PC|pc|IP|ip|InstrPoint)\s*=\s*(?:PC|pc|IP|ip|InstrPoint)',
+                  text))
+    has_arith = bool(re.search(r'[+\-*/%^]', text))
+    has_cmp = bool(re.search(r'[=~<>]=|[<>](?!=)', text))
+    has_call_expr = bool(re.search(r'\[\s*A\s*\]\s*\(|Stk\[A\]\s*\(|Stk\[Inst\[OP_A\]\]\s*\(', text))
+    has_ret = bool(re.search(r'\breturn\b', text))
+    has_table_op = bool(re.search(r'\[\s*[BC]\s*\]\s*\[|Stk\[Inst\[OP_A\]\]\[', text))
+    has_env = bool(re.search(r'_ENV|_G\[|Env\[', text))
+    has_upval = bool(re.search(r'[Uu]pval|Upvalues\[', text))
+    has_concat = bool(re.search(r'\.\.', text))
+    has_hash = bool(re.search(r'#\s*\w|#\s*Stk', text))
+    has_neg = bool(re.search(r'=\s*-\s*\w|=\s*-\s*Stk', text))
+    has_not = bool(re.search(r'=\s*not\s+\w|=\s*\(not\s+', text))
+    has_new_tbl = bool(re.search(r'=\s*\{\s*\}', text))
+    has_closure = bool(re.search(r'Proto|closure|<closure|Wrap\s*\(\s*Proto', text))
+    has_vararg = bool(re.search(r'\.\.\.', text))
+    has_for_step = bool(re.search(r'FORLOOP|forloop|A\s*\+\s*A\s*\+\s*2|Step\s*=\s*Stk\[A\+2\]', text))
+    has_for_prep = bool(re.search(r'FORPREP|forprep|A\s*-\s*A\s*\+\s*2|Stk\[A\]\s*=\s*Stk\[A\]\s*-\s*Stk\[A\+2\]',
+                                  text))
+    has_setlist = bool(re.search(r'SETLIST|setlist|Offset\s*=\s*\(Inst\[OP_C\]', text))
+    has_self = bool(re.search(r'Stk\[A\+1\]\s*=\s*B|SELF', text))
+    has_moonsec = bool(re.search(r'Stk\[Inst\[OP_|Inst\[OP_A\]|InstrPoint', text))
+
+    if assigns_to_a and has_for_step:  return 'forloop', 0.93
+    if assigns_to_a and has_for_prep:  return 'forprep', 0.93
+    if has_self:                       return 'self', 0.92
+    if has_pc_mod and not has_arith:   return 'jmp', 0.92
+    if has_ret and not has_call_expr:  return 'return', 0.85
+    if has_call_expr and has_ret:      return 'tailcall', 0.90
+    if has_call_expr and assigns_to_a: return 'call', 0.88
+    if has_concat:                     return 'concat', 0.85
+    if has_closure:                    return 'closure', 0.90
+    if has_vararg:                     return 'vararg', 0.82
+    if has_setlist:                    return 'setlist', 0.88
+    if has_new_tbl:                    return 'newtable', 0.87
+    if has_hash and assigns_to_a:      return 'len', 0.90
+    if has_neg and assigns_to_a:       return 'unm', 0.90
+    if has_not and assigns_to_a:       return 'not', 0.90
+    if has_table_op and assigns_to_a:  return 'gettable', 0.88
+    if has_table_op and not assigns_to_a: return 'settable', 0.88
+    if has_env and assigns_to_a:       return 'getglobal', 0.86
+    if has_env and not assigns_to_a:   return 'setglobal', 0.86
+    if has_upval and assigns_to_a:     return 'getupval', 0.87
+    if has_upval and not assigns_to_a: return 'setupval', 0.87
+    if assigns_to_a and reads_from_bc and has_arith:
+        if re.search(r'\+(?!=)', text): return 'add', 0.90
+        if re.search(r'-(?!=)', text): return 'sub', 0.90
+        if re.search(r'\*', text): return 'mul', 0.90
+        if re.search(r'(?<!/)/(?!/)', text): return 'div', 0.88
+        if re.search(r'%', text): return 'mod', 0.88
+        if re.search(r'\^', text): return 'pow', 0.88
+        if re.search(r'//', text): return 'idiv', 0.88
+    if has_cmp and not has_arith:
+        if re.search(r'==', text): return 'eq', 0.86
+        if re.search(r'~=', text) or re.search(r'!=', text): return 'ne', 0.86
+        if re.search(r'<[^<=]', text): return 'lt', 0.86
+        if re.search(r'<=', text): return 'le', 0.86
+        if re.search(r'>[^=]', text): return 'gt', 0.86
+        if re.search(r'>=', text): return 'ge', 0.86
+    if assigns_to_a and has_bx and not reads_from_bc: return 'loadk', 0.86
+    if assigns_to_a and not reads_from_bc and not has_arith and not has_cmp:
+        if re.search(r'=\s*(true|false)\b', text): return 'loadbool', 0.84
+        if re.search(r'=\s*nil\b', text): return 'loadnil', 0.82
+        if re.search(r'=\s*\w+\s*\[', text) or has_moonsec: return 'move', 0.80
+    return None, 0.0
+
+
+def _classify_by_patterns(text: str) -> Tuple[Optional[str], float, int]:
+    best_sem = None
+    best_score = 0.0
+    best_eff = 0
+
+    EXTENDED_PATTERNS = [
+        ('move', [r'\bR\[?A\]?\s*=\s*R\[?B\]?', r'\bStack\[A\]\s*=\s*Stack\[B\]',
+                  r'\bReg\[A\]\s*=\s*Reg\[B\]', r'\bvm_reg\[A\]\s*=\s*vm_reg\[B\]',
+                  r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]', r'Stk\[A\]\s*=\s*Stk\[B\]'], 0.94, 0),
+        ('loadk', [r'Stack\[A\]\s*=\s*Const', r'Reg\[A\]\s*=\s*K\[', r'\bConstants\[\w+\]',
+                   r'\bconst\s*\[\s*\w+\s*\]', r'R\[A\]\s*=\s*K\[',
+                   r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]', r'Stk\[A\]\s*=\s*Const\[B\]'], 0.92, 0),
+        ('loadbool', [r'Stack\[A\]\s*=\s*(true|false)', r'Reg\[A\]\s*=\s*(true|false)',
+                      r'Stk\[Inst\[OP_A\]\]\s*=\s*(true|false)', r'Stk\[A\]\s*=\s*\(Inst\[OP_B\]\s*~=\s*0\)'], 0.85,
+         0),
+        ('loadnil', [r'Stack\[A\]\s*=\s*nil', r'Reg\[A\]\s*=\s*nil', r'=\s*nil\b',
+                     r'Stk\[Inst\[OP_A\]\]\s*=\s*nil', r'for\s+\w+\s*=\s*Inst\[OP_A\].*nil'], 0.82, 0),
+        ('getupval', [r'[Uu]pval(?:ue)?s?\[', r'\bUpValue\[', r'\bupval\b',
+                      r'Stk\[Inst\[OP_A\]\]\s*=\s*Upvalues\[Inst\[OP_B\]\]'], 0.90, 0),
+        ('setupval', [r'[Uu]pval(?:ue)?s?\[[^\]]+\]\s*=', r'\bUpValue\[[^\]]+\]\s*=',
+                      r'Upvalues\[Inst\[OP_B\]\]\s*=\s*Stk\[Inst\[OP_A\]\]'], 0.90, 0),
+        ('getglobal', [r'_ENV\[', r'getfenv\s*\(', r'_G\[', r'getglobal\s*\(',
+                       r'Stk\[Inst\[OP_A\]\]\s*=\s*Env\[Const\[Inst\[OP_B\]\]\]'], 0.88, 0),
+        ('setglobal', [r'_ENV\[[^\]]+\]\s*=', r'_G\[[^\]]+\]\s*=',
+                       r'Env\[Const\[Inst\[OP_B\]\]\]\s*=\s*Stk\[Inst\[OP_A\]\]'], 0.88, 0),
+        ('gettable', [r'Stack\[A\]\s*=\s*Stack\[B\]\[', r'Reg\[A\]\s*=\s*Reg\[B\]\[',
+                      r'gettable\s*\(', r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\[',
+                      r'Stk\[A\]\s*=\s*Stk\[B\]\['], 0.93, 0),
+        ('settable', [r'Stack\[A\]\[[^\]]+\]\s*=', r'Reg\[A\]\[[^\]]+\]\s*=', r'settable\s*\(',
+                      r'Stk\[Inst\[OP_A\]\]\[Stk\[Inst\[OP_B\]\]\]\s*=',
+                      r'Stk\[Inst\[OP_A\]\]\[Const\[Inst\[OP_B\]\]\]\s*='], 0.93, 0),
+        ('newtable', [r'Stack\[A\]\s*=\s*\{\s*\}', r'Reg\[A\]\s*=\s*\{\s*\}',
+                      r'newtable', r'table\.create', r'Stk\[Inst\[OP_A\]\]\s*=\s*\{\s*\}',
+                      r'Stk\[A\]\s*=\s*\{\s*\}'], 0.90, 0),
+        ('add', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*\+\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*\+\s*Reg\[C\]',
+                 r'\bArith(?:metic)?\s*\(\s*[\'\"]\+', r'op\s*==\s*[\'\"]\+',
+                 r'\badd\b', r'[Aa]rithmetic.*?\+',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\+\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\+\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\+\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\+\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('sub', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*-\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*-\s*Reg\[C\]',
+                 r'\bArith(?:metic)?\s*\(\s*[\'\"][-]', r'\bsub\b',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*-\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*-\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*-\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*-\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('mul', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*\*\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*\*\s*Reg\[C\]',
+                 r'\bArith(?:metic)?\s*\(\s*[\'\"]\*', r'\bmul\b',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\*\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\*\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\*\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\*\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('div', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*/\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*/\s*Reg\[C\]',
+                 r'\bdiv\b', r'\bArith(?:metic)?\s*\(\s*[\'\"]\/',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*/\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*/\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*/\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*/\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('mod', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*%\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*%\s*Reg\[C\]',
+                 r'\bmod\b',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*%\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*%\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*%\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*%\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('pow', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*\^\s*Stack\[C\]',
+                 r'Reg\[A\]\s*=\s*Reg\[B\]\s*\^\s*Reg\[C\]',
+                 r'\bpow\b', r'math\.pow',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\^\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\^\s*Stk\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Stk\[Inst\[OP_B\]\]\s*\^\s*Const\[Inst\[OP_C\]\]',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*Const\[Inst\[OP_B\]\]\s*\^\s*Const\[Inst\[OP_C\]\]'], 0.96, -1),
+        ('idiv', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*//\s*Stack\[C\]',
+                  r'Reg\[A\]\s*=\s*Reg\[B\]\s*//\s*Reg\[C\]',
+                  r'\bidiv\b'], 0.93, -1),
+        ('band', [r'Stack\[A\]\s*=\s*Stack\[B\]\s*&\s*Stack\[C\]',
+                  r'bit32\.band\b', r'\bband\b'], 0.90, -1),
+        ('bor', [r'bit32\.bor\b', r'\bbor\b'], 0.90, -1),
+        ('bxor', [r'bit32\.bxor\b', r'\bbxor\b', r'Stack\[A\]\s*=\s*Stack\[B\]\s*~\s*Stack\[C\]'], 0.90, -1),
+        ('shl', [r'bit32\.lshift\b', r'<<\s*Stack', r'<<\s*Reg'], 0.88, -1),
+        ('shr', [r'bit32\.rshift\b', r'>>\s*Stack', r'>>\s*Reg'], 0.88, -1),
+        ('unm', [r'Stack\[A\]\s*=\s*-\s*Stack\[B\]', r'\bunm\b', r'unary\s*-',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*-\s*Stk\[Inst\[OP_B\]\]'], 0.92, 0),
+        ('not', [r'Stack\[A\]\s*=\s*not\s+Stack', r'Reg\[A\]\s*=\s*not\s+Reg', r'\bnot\s+Reg',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*\(not\s+Stk\[Inst\[OP_B\]\]\)'], 0.92, 0),
+        ('len', [r'Stack\[A\]\s*=\s*#\s*Stack', r'Reg\[A\]\s*=\s*#\s*Reg', r'#\s*Stack\[',
+                 r'Stk\[Inst\[OP_A\]\]\s*=\s*#\s*Stk\[Inst\[OP_B\]\]'], 0.92, 0),
+        ('bnot', [r'bit32\.bnot\b', r'\bbnot\b'], 0.87, 0),
+        ('concat', [r'\.\.\s*Stack', r'\.\.\s*Reg', r'table\.concat', r'concat\s*\(',
+                    r'local\s+B\s*=\s*Inst\[OP_B\].*\.\.', r'K\s*=\s*K\s*\.\.\s*Stk'], 0.90, -1),
+        ('jmp', [r'\bPC\s*=\s*PC\s*[+\-]', r'\bIP\s*=\s*IP\s*[+\-]', r'\bpc\s*=\s*pc\s*[+\-]',
+                 r'goto\s+', r'\bJump\s*\(', r'\bjmp\b',
+                 r'InstrPoint\s*=\s*InstrPoint\s*\+\s*Inst\[OP_B\]', r'InstrPoint\s*=\s*InstrPoint\s*[+\-]'], 0.94, 0),
+        ('eq', [r'Stack\[B\]\s*==\s*Stack\[C\]', r'Reg\[B\]\s*==\s*Reg\[C\]',
+                r'\beq\b', r'compare\s*==',
+                r'if\s*\(\s*Stk\[Inst\[OP_A\]\]\s*==\s*Stk\[Inst\[OP_C\]\]\s*\)',
+                r'if\s*\(\s*Const\[Inst\[OP_A\]\]\s*==\s*Stk\[Inst\[OP_C\]\]\s*\)',
+                r'if\s*\(\s*Stk\[Inst\[OP_A\]\]\s*==\s*Const\[Inst\[OP_C\]\]\s*\)'], 0.92, 0),
+        ('lt', [r'Stack\[B\]\s*<\s*Stack\[C\]', r'Reg\[B\]\s*<\s*Reg\[C\]', r'\blt\b',
+                r'if\s*\(\s*Stk\[Inst\[OP_A\]\]\s*<\s*Stk\[Inst\[OP_C\]\]\s*\)',
+                r'if\s*\(\s*Const\[Inst\[OP_A\]\]\s*<\s*Stk\[Inst\[OP_C\]\]\s*\)'], 0.92, 0),
+        ('le', [r'Stack\[B\]\s*<=\s*Stack\[C\]', r'Reg\[B\]\s*<=\s*Reg\[C\]', r'\ble\b',
+                r'if\s*\(\s*Stk\[Inst\[OP_A\]\]\s*<=\s*Stk\[Inst\[OP_C\]\]\s*\)'], 0.92, 0),
+        ('test', [r'\bTEST\b', r'\btest\s*\(', r'\bTest\s*\(',
+                  r'if\s*\(\s*not\s*Stk\[Inst\[OP_A\]\]\s*\)', r'if\s*Stk\[Inst\[OP_A\]\]\s+then'], 0.85, 0),
+        ('testset', [r'\bTESTSET\b', r'\btestset\s*\('], 0.85, 0),
+        ('call', [r'\bStack\[A\]\s*\(', r'\bReg\[A\]\s*\(', r'\bCall\s*\(', r'\bcall\s*\(',
+                  r'local\s+A\s*=\s*Inst\[OP_A\].*Args\s*=\s*\{\}', r'Stk\[A\]\s*\(.*Unpack',
+                  r'Results\s*=\s*\{\s*Stk\[A\]\s*\('], 0.92, -1),
+        ('tailcall', [r'return\s+Stack\[A\]\s*\(', r'return\s+Reg\[A\]\s*\(', r'tailcall', r'TailCall',
+                      r'do\s+return\s+Stk\[A\]\s*\('], 0.94, 0),
+        ('return', [r'\breturn\b', r'\bRETURN\b',
+                    r'local\s+A\s*=\s*Inst\[OP_A\].*Output\s*=\s*\{\}', r'do\s+return\s+end'], 0.88, 0),
+        ('forloop', [r'FORLOOP', r'forloop', r'Stack\[A\]\s*=\s*Stack\[A\]\s*\+\s*Stack\[A\+2\]',
+                     r'numeric\s*for', r'step.*loop',
+                     r'local\s+A\s*=\s*Inst\[OP_A\].*Step\s*=\s*Stk\[A\+2\]',
+                     r'Stk\[A\]\s*=\s*Index.*if\s+Step\s*>\s*0'], 0.95, 0),
+        ('forprep', [r'FORPREP', r'forprep', r'Stack\[A\]\s*=\s*Stack\[A\]\s*-\s*Stack\[A\+2\]',
+                     r'Stk\[A\]\s*=\s*Stk\[A\]\s*-\s*Stk\[A\+2\]'], 0.95, 0),
+        ('tforloop', [r'TFORLOOP', r'tforloop', r'generic\s*for',
+                      r'local\s+A\s*=\s*Inst\[OP_A\].*Results\s*=\s*\{\s*Stk\[A\]\s*\('], 0.90, 0),
+        ('setlist', [r'SETLIST', r'setlist', r'list\s*assign',
+                     r'local\s+A\s*=\s*Inst\[OP_A\].*Offset\s*=\s*\(Inst\[OP_C\]\s*-\s*1\)\s*\*\s*50',
+                     r'T\[Offset\s*\+\s*Idx\]\s*=\s*Stk'], 0.92, 0),
+        ('close', [r'\bCLOSE\b', r'\bclose\s*\(', r'close\s*upvals?',
+                   r'local\s+A\s*=\s*Inst\[OP_A\].*Lupvals'], 0.88, 0),
+        ('closure', [r'CLOSURE', r'closure', r'Proto(?:type)?s?\[',
+                     r'Stk\[Inst\[OP_A\]\]\s*=\s*Wrap\s*\(\s*Proto\[Inst\[OP_B\]\]'], 0.94, 0),
+        ('vararg', [r'VARARG', r'vararg', r'\.\.\.',
+                    r'local\s+A\s*=\s*Inst\[OP_A\].*for\s+Idx\s*=\s*A'], 0.85, 0),
+        ('self', [r'\bSELF\b', r'\bself\b',
+                  r'Stk\[A\+1\]\s*=\s*B\s*;\s*Stk\[A\]\s*=\s*B\[',
+                  r'local\s+A\s*=\s*Inst\[OP_A\].*Stk\[A\+1\]\s*=\s*B'], 0.93, 0),
+        ('newstack', [r'Stk\s*=\s*\{\s*\}', r'NewStk', r'PCount'], 0.88, 0),
+        ('settop', [r'Top\s*=\s*Inst\[OP_A\]', r'SetTop'], 0.88, 0),
+        ('setfenv', [r'Env\s*=\s*Stk\[Inst\[OP_A\]\]', r'SetFEnv'], 0.88, 0),
+    ]
+
+    for sem, patterns, base_conf, eff in EXTENDED_PATTERNS:
+        score = sum(1.0 for p in patterns if _safe_search(p, text))
+        if score > 0:
+            conf = min(base_conf + 0.025 * (score - 1), 0.99)
+            if conf > best_score:
+                best_score, best_sem, best_eff = conf, sem, eff
+    return best_sem, best_score, best_eff
+
+
+def _safe_search(pat: str, text: str) -> bool:
+    try:
+        return bool(re.search(pat, text, re.IGNORECASE))
+    except Exception:
+        return False
+
+
+def _classify_by_dataflow(text: str) -> Tuple[Optional[str], float]:
+    writes_a = bool(re.search(r'\[\s*A\s*\]\s*=|\bA\s*=|Inst\[OP_A\]\s*\]\s*=', text))
+    reads_b = bool(re.search(r'\bB\b|Inst\[OP_B\]', text))
+    reads_c = bool(re.search(r'\bC\b|Inst\[OP_C\]', text))
+    uses_bx = bool(re.search(r'\bBx\b|Inst\[OP_B\]', text))
+    uses_sbx = bool(re.search(r'\bsBx\b|\bSBx\b|InstrPoint', text))
+    has_return = bool(re.search(r'\breturn\b', text))
+    has_call = bool(re.search(r'\bCall\s*\(|\bpcall\b|\bReg\[A\]\s*\(|\bStack\[A\]\s*\(|Stk\[A\]\s*\(|Args\s*=\s*\{\}',
+                              text))
+    has_arith = bool(re.search(r'[+\-*/%^]', text))
+    has_concat = bool(re.search(r'\.\.', text))
+    has_jump = bool(re.search(r'(?:PC|pc|IP|ip|InstrPoint)\s*=|goto\b', text))
+    has_global = bool(re.search(r'_ENV|_G\[|Env\[', text))
+    has_upval = bool(re.search(r'[Uu]pval|Upvalues\[', text))
+    has_cond = bool(re.search(r'\bif\b', text))
+    has_for_step = bool(re.search(r'A\s*\+\s*2|FORLOOP|forloop|step.*loop|Step\s*=\s*Stk\[A\+2\]', text))
+    has_for_prep = bool(re.search(r'A\s*-\s*2|FORPREP|forprep|Stk\[A\]\s*=\s*Stk\[A\]\s*-\s*Stk\[A\+2\]', text))
+    has_tfor = bool(re.search(r'TFORLOOP|tforloop|generic.?for', text, re.I))
+    has_hash = bool(re.search(r'#\s*(?:Stack|Reg|Stk|\w+\[)', text))
+    has_not = bool(re.search(r'=\s*not\s+|=\s*\(not\s+', text))
+    has_neg = bool(re.search(r'=\s*-\s*(?:Stack|Reg|Stk)', text))
+    has_bnot = bool(re.search(r'bit32\.bnot|\bbnot\b|~\s*(?:Stack|Reg|Stk)', text))
+    has_newtbl = bool(re.search(r'=\s*\{\s*\}', text))
+    has_closure = bool(re.search(r'Proto|closure|Wrap\s*\(\s*Proto', text, re.I))
+    has_vararg = bool(re.search(r'\.\.\.', text))
+    has_setlist = bool(re.search(r'SETLIST|setlist|Offset\s*=\s*\(Inst\[OP_C\]', text))
+    has_rk_b = bool(re.search(r'RK\s*\(\s*B\s*\)|B\s*>=\s*256|Const\[Inst\[OP_B\]\]', text))
+    has_rk_c = bool(re.search(r'RK\s*\(\s*C\s*\)|C\s*>=\s*256|Const\[Inst\[OP_C\]\]', text))
+    has_self = bool(re.search(r'Stk\[A\+1\]\s*=\s*B|SELF', text))
+
+    if has_for_step and writes_a:    return 'forloop', 0.94
+    if has_for_prep and writes_a:    return 'forprep', 0.94
+    if has_self:                     return 'self', 0.93
+    if has_tfor:                     return 'tforloop', 0.90
+    if has_setlist:                  return 'setlist', 0.90
+    if has_closure:                  return 'closure', 0.90
+    if has_vararg and writes_a:      return 'vararg', 0.84
+    if uses_sbx and has_jump and not has_arith: return 'jmp', 0.92
+    if has_return and not has_call:  return 'return', 0.86
+    if has_return and has_call:      return 'tailcall', 0.90
+    if has_call and writes_a:        return 'call', 0.88
+    if has_concat:                   return 'concat', 0.86
+    if has_hash and writes_a:        return 'len', 0.90
+    if has_not and writes_a:         return 'not', 0.90
+    if has_neg and writes_a:         return 'unm', 0.90
+    if has_bnot and writes_a:        return 'bnot', 0.88
+    if has_newtbl and writes_a:      return 'newtable', 0.88
+    if has_upval:
+        return ('getupval', 0.88) if writes_a else ('setupval', 0.88)
+    if has_global:
+        return ('getglobal', 0.87) if writes_a else ('setglobal', 0.87)
+    if has_cond and (has_rk_b or reads_b) and (has_rk_c or reads_c):
+        if re.search(r'==', text):  return 'eq', 0.86
+        if re.search(r'~=', text):  return 'ne', 0.86
+        if re.search(r'<=', text):  return 'le', 0.86
+        if re.search(r'<(?!=)', text): return 'lt', 0.86
+        if re.search(r'>=', text):  return 'ge', 0.86
+        if re.search(r'>(?!=)', text): return 'gt', 0.86
+    if writes_a and (reads_b or has_rk_b) and (reads_c or has_rk_c) and has_arith:
+        if re.search(r'\+(?!=)', text):   return 'add', 0.90
+        if re.search(r'-(?!=)', text):   return 'sub', 0.90
+        if re.search(r'\*', text):   return 'mul', 0.90
+        if re.search(r'//', text):   return 'idiv', 0.88
+        if re.search(r'(?<!/)/(?!/)', text): return 'div', 0.88
+        if re.search(r'%(?!=)', text):    return 'mod', 0.88
+        if re.search(r'\^', text):   return 'pow', 0.88
+    if writes_a and uses_bx and not has_arith and not has_cond:
+        return 'loadk', 0.84
+    if writes_a and not reads_b and not reads_c and not has_arith:
+        if re.search(r'=\s*(true|false)\b', text): return 'loadbool', 0.84
+        if re.search(r'=\s*nil\b', text): return 'loadnil', 0.82
+    return None, 0.0
+
+
+def upgrade_vm_emulator_execute(instructions, handler_infos, constants):
+    regs: Dict[int, Any] = {}
+    upvals: Dict[int, Any] = {}
+    out: List[str] = []
+    pc = 0
+    max_steps = 1_200_000
+    steps = 0
+    for_stack: List[Dict] = []
+
+    jump_targets: Set[int] = set()
+    opcode_map: Dict[int, str] = {
+        k: v.semantic for k, v in handler_infos.items() if v.semantic
+    }
+    for instr in instructions:
+        sem = instr.semantic or opcode_map.get(instr.opcode, '')
+        idx = getattr(instr, 'index', 0)
+        if sem == 'jmp':
+            jump_targets.add(idx + 1 + instr.sBx)
+        elif sem in ('eq', 'lt', 'le', 'test', 'testset', 'tforloop'):
+            jump_targets.add(idx + 2)
+        elif sem == 'forloop':
+            jump_targets.add(idx + 1 + instr.sBx)
+        elif sem == 'forprep':
+            jump_targets.add(idx + 1)
+
+    def _val(v: Any) -> str:
+        if isinstance(v, str): return v
+        if v is None: return 'nil'
+        return repr(v)
+
+    def reg(r: int) -> str:
+        return _val(regs.get(r))
+
+    def const(k: int) -> str:
+        if 0 <= k < len(constants):
+            v = constants[k]
+            if isinstance(v, str):
+                return json.dumps(v)
+            if isinstance(v, float) and v.is_integer():
+                return str(int(v))
+            return repr(v)
+        return f'K[{k}]'
+
+    def rk(x: int) -> str:
+        return const(x - 256) if x >= 256 else reg(x)
+
+    def emit(line: str):
+        if line and line not in ('', 'nil = nil'):
+            out.append(line)
+
+    def _set_reg(r: int, expr: str):
+        m = re.match(r'^reg_(\d+)$', expr)
+        if m:
+            regs[r] = regs.get(int(m.group(1)), expr)
+        else:
+            regs[r] = expr
+
+    while 0 <= pc < len(instructions) and steps < max_steps:
+        instr = instructions[pc]
+        sem = instr.semantic or opcode_map.get(instr.opcode, '')
+        A, B, C, Bx, sBx = instr.A, instr.B, instr.C, instr.Bx, instr.sBx
+        idx = getattr(instr, 'index', pc)
+
+        if idx in jump_targets:
+            emit(f'::label_{idx}::')
+
+        try:
+            if sem == 'move':
+                regs[A] = regs.get(B)
+            elif sem == 'loadk':
+                _set_reg(A, const(Bx))
+            elif sem == 'loadbool':
+                regs[A] = 'true' if B else 'false'
+                if C:
+                    pc += 2
+                    continue
+            elif sem == 'loadnil':
+                for r in range(A, min(B + 1, 256)):
+                    regs[r] = None
+            elif sem == 'getupval':
+                name = upvals.get(B)
+                regs[A] = name if isinstance(name, str) else f'upval_{B}'
+            elif sem == 'setupval':
+                val = reg(A)
+                upvals[B] = val
+                emit(f'upval_{B} = {val}')
+            elif sem == 'getglobal':
+                _set_reg(A, f'_ENV[{const(Bx)}]')
+            elif sem == 'setglobal':
+                emit(f'_ENV[{const(Bx)}] = {reg(A)}')
+            elif sem == 'gettable':
+                k = rk(C)
+                _set_reg(A, f'{reg(B)}[{k}]')
+            elif sem == 'settable':
+                emit(f'{reg(A)}[{rk(B)}] = {rk(C)}')
+            elif sem == 'newtable':
+                _set_reg(A, '{}')
+            elif sem == 'self':
+                obj = reg(B)
+                regs[A + 1] = obj
+                _set_reg(A, f'{obj}[{rk(C)}]')
+            elif sem in ('add', 'sub', 'mul', 'div', 'mod', 'pow', 'idiv',
+                         'band', 'bor', 'bxor', 'shl', 'shr'):
+                op_sym = {
+                    'add': '+', 'sub': '-', 'mul': '*', 'div': '/',
+                    'mod': '%', 'pow': '^', 'idiv': '//',
+                    'band': '&', 'bor': '|', 'bxor': '~',
+                    'shl': '<<', 'shr': '>>'
+                }[sem]
+                lhs, rhs = rk(B), rk(C)
+                _folded = False
+                if op_sym in ('+', '-', '*', '//', '%'):
+                    try:
+                        a_v, b_v = int(lhs), int(rhs)
+                        ops_map = {'+': a_v + b_v, '-': a_v - b_v, '*': a_v * b_v,
+                                   '//': a_v // b_v if b_v else None,
+                                   '%': a_v % b_v if b_v else None}
+                        v = ops_map.get(op_sym)
+                        if v is not None and abs(v) < 2 ** 32:
+                            _set_reg(A, str(v)); _folded = True
+                    except Exception:
+                        pass
+                if not _folded:
+                    _set_reg(A, f'({lhs} {op_sym} {rhs})')
+            elif sem == 'unm':
+                inner = reg(B)
+                try:
+                    _set_reg(A, str(-int(inner)))
+                except Exception:
+                    _set_reg(A, f'(-{inner})')
+            elif sem == 'not':
+                _set_reg(A, f'(not {reg(B)})')
+            elif sem == 'len':
+                _set_reg(A, f'#{reg(B)}')
+            elif sem == 'bnot':
+                _set_reg(A, f'(~{reg(B)})')
+            elif sem == 'concat':
+                parts = [rk(r) for r in range(B, min(C + 1, 256))]
+                _set_reg(A, '(' + ' .. '.join(parts) + ')' if parts else '""')
+            elif sem == 'jmp':
+                target = idx + 1 + sBx
+                emit(f'goto label_{target}')
+                pc = max(0, min(target, len(instructions)))
+                continue
+            elif sem == 'eq':
+                neg = '' if A == 0 else 'not '
+                next_pc = idx + 2
+                emit(f'if {neg}({rk(B)} == {rk(C)}) then goto label_{next_pc} end')
+            elif sem == 'lt':
+                neg = '' if A == 0 else 'not '
+                next_pc = idx + 2
+                emit(f'if {neg}({rk(B)} < {rk(C)}) then goto label_{next_pc} end')
+            elif sem == 'le':
+                neg = '' if A == 0 else 'not '
+                next_pc = idx + 2
+                emit(f'if {neg}({rk(B)} <= {rk(C)}) then goto label_{next_pc} end')
+            elif sem == 'test':
+                next_pc = idx + 2
+                if C == 0:
+                    emit(f'if not {reg(A)} then goto label_{next_pc} end')
+                else:
+                    emit(f'if {reg(A)} then goto label_{next_pc} end')
+            elif sem == 'testset':
+                next_pc = idx + 2
+                src_val = reg(B)
+                if C == 0:
+                    emit(f'if not {src_val} then goto label_{next_pc} end')
+                else:
+                    emit(f'if {src_val} then goto label_{next_pc} end')
+                regs[A] = src_val
+            elif sem == 'call':
+                fn_repr = reg(A)
+                nargs = B - 1
+                if nargs < 0:
+                    args = [reg(r) for r in range(A + 1, A + 5)]
+                else:
+                    args = [reg(A + 1 + i) for i in range(nargs)]
+                nret = C - 1
+                call_expr = f'{fn_repr}({", ".join(args)})'
+                if nret < 0 or nret == 0:
+                    emit(call_expr)
+                elif nret == 1:
+                    _set_reg(A, call_expr)
+                else:
+                    rets = ', '.join(f'_r{A + i}' for i in range(nret))
+                    for i in range(nret):
+                        regs[A + i] = f'_r{A + i}'
+                    emit(f'local {rets} = {call_expr}')
+            elif sem == 'tailcall':
+                fn_repr = reg(A)
+                nargs = B - 1
+                if nargs < 0:
+                    args = [reg(r) for r in range(A + 1, A + 5)]
+                else:
+                    args = [reg(A + 1 + i) for i in range(nargs)]
+                emit(f'return {fn_repr}({", ".join(args)})')
+            elif sem == 'return':
+                if B == 0:
+                    emit('return ...')
+                elif B == 1:
+                    emit('return')
+                elif B == 2:
+                    emit(f'return {reg(A)}')
+                else:
+                    vals = [reg(A + i) for i in range(B - 1)]
+                    emit(f'return {", ".join(vals)}')
+            elif sem == 'forprep':
+                init_v = reg(A)
+                lim_v = reg(A + 1)
+                step_v = reg(A + 2)
+                loop_var = f'_i{A}'
+                regs[A + 3] = loop_var
+                emit(f'for {loop_var} = {init_v}, {lim_v}, {step_v} do')
+                for_stack.append({'A': A, 'idx': idx, 'var': loop_var})
+            elif sem == 'forloop':
+                emit('end')
+                if for_stack:
+                    for_stack.pop()
+            elif sem == 'tforprep':
+                fn_v = reg(A)
+                state = reg(A + 1)
+                ctrl = reg(A + 2)
+                nret_tfor = C if C > 0 else 1
+                ret_vars = ', '.join(f'_tv{A + 3 + i}' for i in range(nret_tfor))
+                for i in range(nret_tfor):
+                    regs[A + 3 + i] = f'_tv{A + 3 + i}'
+                emit(f'for {ret_vars} in {fn_v}, {state}, {ctrl} do')
+            elif sem == 'tforloop':
+                ctrl_var = reg(A + 3)
+                next_pc = idx + 1 + sBx if sBx != 0 else idx + 2
+                emit(f'if {ctrl_var} == nil then goto label_{next_pc} end')
+                regs[A + 2] = ctrl_var
+            elif sem == 'setlist':
+                tbl = reg(A)
+                base_k = (C - 1) * 50 if C > 0 else 0
+                n = B if B > 0 else 4
+                for i in range(1, n + 1):
+                    if A + i < 256:
+                        emit(f'{tbl}[{base_k + i}] = {reg(A + i)}')
+            elif sem == 'close':
+                pass
+            elif sem == 'closure':
+                _set_reg(A, f'<closure_{Bx}>')
+            elif sem == 'vararg':
+                if B == 0 or B == 1:
+                    regs[A] = '...'
+                else:
+                    for i in range(B - 1):
+                        regs[A + i] = f'select({i + 1}, ...)'
+            elif sem == 'nop':
+                pass
+            else:
+                if sem:
+                    _set_reg(A, f'{sem}({B}, {C})')
+        except Exception:
+            pass
+
+        pc += 1
+        steps += 1
+
+    cleaned: List[str] = []
+    for line in out:
+        if line.startswith('::label_') and cleaned and cleaned[-1].startswith('::label_'):
+            cleaned.append(line)
+        elif line:
+            cleaned.append(line)
+    return cleaned
+
+
+def upgrade_vm_splitter_detect_vars(source: str, existing_pc=None, existing_stack=None, existing_const=None):
+    pc_var = existing_pc
+    stack_var = existing_stack
+    const_var = existing_const
+
+    if not pc_var:
+        pc_patterns = [
+            (r'local\s+(\w+)\s*=\s*1\s*;?\s*while\s+true\s+do', 10),
+            (r'local\s+(\w+)\s*=\s*1\s*;?\s*while\s+\1\s*<=\s*#\w+', 10),
+            (r'local\s+(\w+)\s*=\s*1\s*;?\s*while\s+\1\s*<\s*#\w+', 9),
+            (r'local\s+(\w+)\s*=\s*0\s*;?\s*while\s+\1\s*<\s*#\w+', 9),
+            (r'local\s+(\w+)\s*=\s*1\s*;?\s*repeat\b', 8),
+            (r'local\s+(\w+)\s*=\s*0\s*;?\s*repeat\b', 8),
+            (r'local\s+(\w+)\s*=\s*1\s*;?\s*for\s+\w+\s*=\s*1\s*,\s*#', 7),
+            (r'(\w+)\s*=\s*\1\s*\+\s*1\s*;?(?:\s*--[^\n]*)?\s*(?:until|while|end)', 6),
+            (r'local\s+\w+\s*=\s*\w+\s*\[\s*(\w+)\s*\][\s\S]{0,60}?\bA\b', 5),
+            (r'(\w+)\s*=\s*\1\s*[+\-]\s*\w+\s*;?', 4),
+        ]
+        candidates: Dict[str, int] = {}
+        for pat, weight in pc_patterns:
+            for m in re.finditer(pat, source, re.DOTALL):
+                name = m.group(1)
+                if name not in ('true', 'false', 'nil', 'end', 'do') and len(name) <= 32:
+                    candidates[name] = candidates.get(name, 0) + weight
+        if candidates:
+            pc_var = max(candidates, key=lambda k: candidates[k])
+
+    if not stack_var:
+        stack_patterns = [
+            (r'local\s+(\w+)\s*=\s*\{\s*\}[\s\S]{0,300}?(?:while|repeat|for\s+\w+\s*=)', 9),
+            (r'local\s+(\w+)\s*=\s*\{\s*\}\s*local\s+\w+\s*=\s*\{', 7),
+            (r'local\s+(\w+)\s*=\s*\{\s*\}\s*for\s+\w+\s*=', 7),
+            (r'(\w+)\s*\[\s*A\s*\]\s*=', 6),
+        ]
+        cands2: Dict[str, int] = {}
+        for pat, weight in stack_patterns:
+            for m in re.finditer(pat, source, re.DOTALL):
+                name = m.group(1)
+                if name and name != pc_var and name not in ('true', 'false', 'nil'):
+                    cands2[name] = cands2.get(name, 0) + weight
+        if cands2:
+            stack_var = max(cands2, key=lambda k: cands2[k])
+
+    if not const_var:
+        const_patterns = [
+            (r'local\s+(\w+)\s*=\s*\{[^}]{120,}\}\s*;?\s*local\s+\w+\s*=\s*1', 9),
+            (r'local\s+(\w+)\s*=\s*\{[^}]{120,}\}\s*;?\s*local\s+\w+\s*=\s*\{\s*\}', 9),
+            (r'local\s+(\w+)\s*=\s*\{[^}]{120,}\}\s*;?\s*for\s+\w+\s*=', 8),
+            (r'local\s+(\w+)\s*=\s*\{[^}]{300,}\}', 6),
+            (r'(\w+)\s*\[\s*(?:Bx|K)\s*\]', 5),
+        ]
+        cands3: Dict[str, int] = {}
+        for pat, weight in const_patterns:
+            for m in re.finditer(pat, source, re.DOTALL):
+                name = m.group(1)
+                if name and name != pc_var and name != stack_var and name not in ('true', 'false', 'nil'):
+                    cands3[name] = cands3.get(name, 0) + weight
+        if cands3:
+            const_var = max(cands3, key=lambda k: cands3[k])
+
+    return pc_var, stack_var, const_var
+
+
+def upgrade_string_decoder_pipeline(src: str) -> str:
+    src = _decode_xor_byte_arrays(src)
+    src = _decode_nested_loadstring(src)
+    src = _decode_string_char_variants(src)
+    src = _fold_concat_chains_aggressive(src)
+    src = _decode_bitop_string_tables(src)
+    src = _decode_gsub_char_maps(src)
+    src = _decode_reverse_concat(src)
+    src = _decode_math_op_strings(src)
+    return src
+
+
+def _decode_xor_byte_arrays(src: str) -> str:
+    def arr_repl(m):
+        raw = m.group(1)
+        nums = re.findall(r'0x[0-9a-fA-F]+|\d+', raw)
+        if len(nums) < 3:
+            return m.group(0)
+        try:
+            vals = [int(x, 0) for x in nums]
+            if any(v > 255 for v in vals):
+                return m.group(0)
+        except Exception:
+            return m.group(0)
+        for xk in range(256):
+            try:
+                dec = bytes([(v ^ xk) & 0xFF for v in vals])
+                text = dec.decode('utf-8')
+                if all(32 <= ord(c) < 127 or c in '\n\r\t' for c in text) and len(text) >= 3:
+                    esc = text.replace('\\', '\\\\').replace('"', '\\"')
+                    return f'"{esc}"'
+            except Exception:
+                pass
+        for sub in range(1, 128):
+            try:
+                dec = bytes([(v - sub) & 0xFF for v in vals])
+                text = dec.decode('utf-8')
+                if all(32 <= ord(c) < 127 or c in '\n\r\t' for c in text) and len(text) >= 3:
+                    esc = text.replace('\\', '\\\\').replace('"', '\\"')
+                    return f'"{esc}"'
+            except Exception:
+                pass
+        return m.group(0)
+
+    src = re.sub(
+        r'\{\s*((?:0x[0-9a-fA-F]+|\d+)(?:\s*,\s*(?:0x[0-9a-fA-F]+|\d+)){3,})\s*\}',
+        arr_repl, src
+    )
+    return src
+
+
+def _decode_nested_loadstring(src: str) -> str:
+    def ls_repl(m):
+        inner = m.group(1)
+        for _ in range(5):
+            try:
+                dec = base64.b64decode(inner + '=' * (-len(inner) % 4))
+                text = dec.decode('utf-8', errors='replace')
+                if any(kw in text for kw in ('local ', 'function', 'return', 'end', 'then')):
+                    return text
+                inner = text
+            except Exception:
+                break
+        return m.group(0)
+
+    src = re.sub(
+        r'loadstring\s*\(\s*["\']([A-Za-z0-9+/=]{20,})["\']\s*\)',
+        ls_repl, src
+    )
+    return src
+
+
+def _decode_string_char_variants(src: str) -> str:
+    def sc_repl(m):
+        raw = m.group(1)
+        nums = [int(x.strip()) for x in re.findall(r'\d+', raw)]
+        if not nums:
+            return m.group(0)
+        try:
+            text = ''.join(chr(n) for n in nums if 0 <= n <= 127)
+            if all(32 <= ord(c) < 127 or c in '\n\r\t' for c in text) and len(text) >= 2:
+                esc = text.replace('\\', '\\\\').replace('"', '\\"')
+                return f'"{esc}"'
+        except Exception:
+            pass
+        for xk in range(1, 256):
+            try:
+                text = ''.join(chr((n ^ xk) & 0xFF) for n in nums)
+                if all(32 <= ord(c) < 127 or c in '\n\r\t' for c in text) and len(text) >= 3:
+                    kws = ['local', 'function', 'return', 'end', 'if', 'then', 'print',
+                           'game', 'workspace', 'script', 'Instance', 'wait']
+                    if any(kw in text for kw in kws):
+                        esc = text.replace('\\', '\\\\').replace('"', '\\"')
+                        return f'"{esc}"'
+            except Exception:
+                pass
+        return m.group(0)
+
+    src = re.sub(r'string\.char\(\s*((?:\d+\s*,\s*)+\d+)\s*\)', sc_repl, src)
+    return src
+
+
+def _fold_concat_chains_aggressive(src: str) -> str:
+    def repl(m):
+        return m.group(1) + m.group(2)
+    prev = None
+    rounds = 0
+    while prev != src and rounds < 8:
+        prev = src
+        src = re.sub(r'("(?:[^"\\]|\\.)*")\s*\.\.\s*("(?:[^"\\]|\\.)*")', repl, src)
+        src = re.sub(r"('(?:[^'\\]|\\.)*')\s*\.\.\s*('(?:[^'\\]|\\.)*')", repl, src)
+        rounds += 1
+    return src
+
+
+def _decode_bitop_string_tables(src: str) -> str:
+    def bxor_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str((a ^ b) & 0xFFFFFFFF)
+        except Exception:
+            return m.group(0)
+
+    def band_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str((a & b) & 0xFFFFFFFF)
+        except Exception:
+            return m.group(0)
+
+    def bor_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str((a | b) & 0xFFFFFFFF)
+        except Exception:
+            return m.group(0)
+
+    def rshift_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str((a >> b) & 0xFFFFFFFF)
+        except Exception:
+            return m.group(0)
+
+    def lshift_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str((a << b) & 0xFFFFFFFF)
+        except Exception:
+            return m.group(0)
+
+    num_pat = r'(0x[0-9a-fA-F]+|\d+)'
+    for _ in range(6):
+        prev = src
+        src = re.sub(rf'bit32\.bxor\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', bxor_repl, src)
+        src = re.sub(rf'bit32\.band\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', band_repl, src)
+        src = re.sub(rf'bit32\.bor\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', bor_repl, src)
+        src = re.sub(rf'bit32\.rshift\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', rshift_repl, src)
+        src = re.sub(rf'bit32\.lshift\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', lshift_repl, src)
+        src = re.sub(rf'bit\.bxor\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', bxor_repl, src)
+        src = re.sub(rf'bit\.band\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', band_repl, src)
+        src = re.sub(rf'bit\.bor\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', bor_repl, src)
+        src = re.sub(rf'bit\.rshift\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', rshift_repl, src)
+        src = re.sub(rf'bit\.lshift\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', lshift_repl, src)
+        if src == prev:
+            break
+    return src
+
+
+def _decode_gsub_char_maps(src: str) -> str:
+    def gsub_repl(m):
+        inner, table_body = m.group(1), m.group(2)
+        mappings = re.findall(r'\["([^"]+)"\]\s*=\s*"([^"]*)"', table_body)
+        if not mappings:
+            mappings = re.findall(r"'([^']+)'\s*=\s*'([^']*)'", table_body)
+        if not mappings:
+            return m.group(0)
+        mapping = dict(mappings)
+        result = ''.join(mapping.get(c, c) for c in inner)
+        return f'"{result}"'
+
+    src = re.sub(
+        r'string\.gsub\s*\(\s*"([^"]+)"\s*,\s*\{([^}]+)\}',
+        gsub_repl, src
+    )
+    return src
+
+
+def _decode_reverse_concat(src: str) -> str:
+    def rev_repl(m):
+        inner = m.group(1)
+        return f'"{inner[::-1]}"'
+
+    src = re.sub(r'string\.reverse\s*\(\s*"([^"]+)"\s*\)', rev_repl, src)
+    return src
+
+
+def _decode_math_op_strings(src: str) -> str:
+    def floor_repl(m):
+        try:
+            return str(int(float(m.group(1))))
+        except Exception:
+            return m.group(0)
+
+    def max_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str(max(a, b))
+        except Exception:
+            return m.group(0)
+
+    def min_repl(m):
+        try:
+            a, b = int(m.group(1), 0), int(m.group(2), 0)
+            return str(min(a, b))
+        except Exception:
+            return m.group(0)
+
+    num_pat = r'(0x[0-9a-fA-F]+|\d+(?:\.\d+)?)'
+    src = re.sub(rf'math\.floor\s*\(\s*{num_pat}\s*\)', floor_repl, src)
+    src = re.sub(rf'math\.max\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', max_repl, src)
+    src = re.sub(rf'math\.min\s*\(\s*{num_pat}\s*,\s*{num_pat}\s*\)', min_repl, src)
+    return src
+
+
+def upgrade_variable_renamer(src: str, name_map_in: Optional[Dict[str, str]] = None) -> Tuple[str, Dict[str, str]]:
+    LUA_KWS = {
+        'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
+        'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true',
+        'until', 'while',
+    }
+    LUA_BUILTINS = {
+        'print', 'pairs', 'ipairs', 'next', 'type', 'tostring', 'tonumber', 'select',
+        'rawget', 'rawset', 'rawequal', 'rawlen', 'setmetatable', 'getmetatable',
+        'pcall', 'xpcall', 'error', 'assert', 'unpack', 'require', 'load', 'loadstring',
+        'loadfile', 'dofile', 'collectgarbage', 'coroutine', 'string', 'table', 'math',
+        'io', 'os', 'debug', 'bit', 'bit32', 'utf8', '_G', '_ENV', '_VERSION', 'arg',
+        'newproxy', 'getfenv', 'setfenv', 'gcinfo', 'module', 'package', 'jit',
+        'game', 'workspace', 'script', 'Instance', 'wait', 'spawn', 'tick',
+        'Vector3', 'CFrame', 'Color3', 'UDim2', 'BrickColor',
+    }
+    ROLE_HINTS = [
+        (re.compile(r'Stack|stk|Stk', re.I), 'Stack'),
+        (re.compile(r'Const|CONST|KTable', re.I), 'Const'),
+        (re.compile(r'Instr|instr|opcode|INSTR|Opcode'), 'Instr'),
+        (re.compile(r'Proto|proto|PROTO'), 'Proto'),
+        (re.compile(r'Upval|upval|UPVAL'), 'Upval'),
+        (re.compile(r'\bPC\b|InstrPtr|\bIP\b|\bpc\b|\bip\b'), 'PC'),
+        (re.compile(r'Closure|closure'), 'Closure'),
+        (re.compile(r'[Kk]ey\b'), 'Key'),
+        (re.compile(r'[Tt]able\b|[Tt]bl\b'), 'Table'),
+        (re.compile(r'[Bb]yte\b'), 'Byte'),
+        (re.compile(r'[Ii]ndex\b|[Ii]dx\b'), 'Index'),
+        (re.compile(r'[Rr]esult\b|[Rr]es\b'), 'Result'),
+        (re.compile(r'[Cc]ount\b|[Cc]nt\b'), 'Count'),
+        (re.compile(r'[Oo]ffset\b|[Oo]ff\b'), 'Offset'),
+        (re.compile(r'[Rr]eg\b|[Rr]egister\b'), 'Reg'),
+        (re.compile(r'[Aa]rgs\b|[Pp]aram\b'), 'Arg'),
+        (re.compile(r'[Cc]ache\b'), 'Cache'),
+        (re.compile(r'[Dd]ecod'), 'Decoder'),
+        (re.compile(r'[Bb]uf\b|[Bb]uffer\b'), 'Buf'),
+        (re.compile(r'[Hh]andler\b'), 'Handler'),
+        (re.compile(r'[Tt]emp\b|[Tt]mp\b'), 'Tmp'),
+        (re.compile(r'[Aa]ccum'), 'Acc'),
+        (re.compile(r'[Ww]rap'), 'Wrap'),
+    ]
+    OBF_PATS = [
+        re.compile(r'^[lI]{4,}$'),
+        re.compile(r'^[O0]{4,}$'),
+        re.compile(r'^_+\d+$'),
+        re.compile(r'^__[a-z]{3,6}\d{3,}$', re.I),
+        re.compile(r'^[a-z]\d{5,}$'),
+        re.compile(r'^_0x[0-9a-fA-F]{4,}$'),
+        re.compile(r'^[_]{2,}[a-zA-Z0-9]{2,}[_]{2,}$'),
+        re.compile(r'^[lI]{2,}[0-9]{2,}[lI]{2,}$'),
+        re.compile(r'^[Il1|]{6,}$'),
+        re.compile(r'^[A-Za-z]{1,4}_[A-Za-z0-9]{8,}$'),
+        re.compile(r'^[a-z]{2,4}[A-Z]{2,4}[a-z]{2,4}$'),
+        re.compile(r'^[A-Za-z_][A-Za-z0-9_]*[0-9]{4,}$'),
+        re.compile(r'^[a-zA-Z]{8,}$'),
+    ]
+
+    def is_obf(name: str) -> bool:
+        return any(p.match(name) for p in OBF_PATS)
+
+    def guess_role(name: str) -> Optional[str]:
+        for pat, role in ROLE_HINTS:
+            if pat.search(name):
+                return role
+        return None
+
+    name_map: Dict[str, str] = dict(name_map_in) if name_map_in else {}
+    counters: Dict[str, int] = defaultdict(int)
+
+    tokens = set(re.findall(r'\b([a-zA-Z_]\w*)\b', src))
+    for tok in tokens:
+        if tok in LUA_KWS or tok in LUA_BUILTINS:
+            continue
+        if tok in name_map:
+            continue
+        if not is_obf(tok):
+            continue
+        role = guess_role(tok)
+        if role:
+            counters[role] += 1
+            name_map[tok] = f'{role}_{counters[role]}'
+        else:
+            counters['var'] += 1
+            name_map[tok] = f'var_{counters["var"]}'
+
+    result = src
+    for old, new in sorted(name_map.items(), key=lambda x: -len(x[0])):
+        result = re.sub(r'\b' + re.escape(old) + r'\b', new, result)
+    return result, name_map
+
+
+def upgrade_anti_tamper_bypass(src: str) -> str:
+    src = re.sub(
+        r'if\s+tostring\s*\(\s*\w+\s*\)\s*~=\s*["\'].*?["\']\s*then\s*(?:error|os\.exit|return)\s*.*?end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'local\s+\w+\s*=\s*0\s*for\s+\w+\s*=\s*1\s*,\s*#\w+\s*do\s*\w+\s*=\s*\w+\s*\*\s*31\s*\+\s*string\.byte\s*\(\s*\w+\s*,\s*\w+\s*\)\s*end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'if\s+\w+\s*~=\s*\d+\s*then\s*(?:error|return|os\.exit)\s*\(.*?\)\s*end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'local\s+\w+\s*=\s*0\s*for\s+\w+\s*=\s*1\s*,\s*#\w+\s*do\s*\w+\s*=\s*\(\w+\s*\+\s*string\.byte\s*\(\w+\s*,\s*\w+\)\s*\*\s*\d+\)\s*%\s*\d+\s*end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'local\s+\w+\s*=\s*0\s*for\s+\w+\s*=\s*1\s*,\s*#\w+\s*do\s*\w+\s*=\s*\w+\s*\*\s*\d+\s*\+\s*string\.byte\s*\(\s*\w+\s*,\s*\w+\s*\)\s*end\s*\w+\s*=\s*\w+\s*%\s*\d+',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'if\s+string\.len\s*\(\s*\w+\s*\)\s*~=\s*\d+\s*then\s*(?:error|return|os\.exit).*?end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(r'os\.clock\(\)|os\.time\(\)|tick\(\)', '0', src)
+    src = re.sub(r'getfenv\s*\(\s*[01]\s*\)', '_ENV', src)
+    src = re.sub(r'debug\.sethook\s*\(.*?\)', '', src, flags=re.DOTALL)
+    src = re.sub(r'debug\.getinfo\s*\(.*?\)', '{}', src, flags=re.DOTALL)
+    src = re.sub(r'rawset\s*\(\s*_ENV\s*,.*?\)', '', src, flags=re.DOTALL)
+    src = re.sub(r'newproxy\s*\(.*?\)', 'nil', src, flags=re.DOTALL)
+    src = re.sub(
+        r'assert\s*\(\s*type\s*\(\s*\w+\s*\)\s*==\s*["\'][\w]+["\']\s*(?:,\s*["\'][^"\']*["\'])?\s*\)',
+        '', src
+    )
+    src = re.sub(
+        r'if\s+not\s+pcall\s*\(.*?\)\s*then\s*(?:error|return|os\.exit).*?end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(
+        r'error\s*\(\s*["\'][^"\']*(?:tamper|corrupt|modif|invalid|integrity)[^"\']*["\']\s*\)',
+        'nil', src, flags=re.IGNORECASE
+    )
+    src = re.sub(
+        r'if\s+type\s*\(\s*\w+\s*\)\s*~=\s*["\'](?:function|table|string|number)["\']\s*then\s*(?:error|return).*?end',
+        '', src, flags=re.DOTALL
+    )
+    src = re.sub(r'setfenv\s*\(\s*\d+\s*,\s*\w+\s*\)', '', src)
+    src = re.sub(r'rawequal\s*\([^)]+\)', 'true', src)
+    return src
+
+
+def upgrade_decoder_brute_force(payload: List[int], vm_type: str = '') -> Optional[bytes]:
+    if not payload:
+        return None
+
+    LUA_MAGIC = b'\x1bLua'
+
+    def valid_lua(data: bytes) -> bool:
+        if data[:4] == LUA_MAGIC:
+            return True
+        if len(data) > 40:
+            printable = sum(1 for b in data[:512] if 32 <= b < 127 or b in (9, 10, 13))
+            if printable / min(len(data), 512) > 0.88:
+                try:
+                    text = data.decode('utf-8', errors='strict')
+                    return any(kw in text for kw in ('local ', 'function', 'return ', 'end', 'then'))
+                except Exception:
+                    pass
+        return False
+
+    raw = bytes(payload)
+
+    for xk in range(256):
+        dec = bytes(b ^ xk for b in raw)
+        if valid_lua(dec):
+            return dec
+
+    for start in range(256):
+        for step in (1, 3, 5, 7, 11, 13, 17, 31, 63, 127):
+            k = start
+            dec = bytearray(len(raw))
+            for i, b in enumerate(raw):
+                dec[i] = b ^ k
+                k = (k + step) & 0xFF
+            if valid_lua(bytes(dec)):
+                return bytes(dec)
+
+    for add in range(256):
+        dec_sub = bytes((b - add) & 0xFF for b in raw)
+        if valid_lua(dec_sub):
+            return dec_sub
+        dec_add = bytes((b + add) & 0xFF for b in raw)
+        if valid_lua(dec_add):
+            return dec_add
+
+    if len(raw) >= 4:
+        inferred_key = bytes(raw[i] ^ LUA_MAGIC[i] for i in range(4))
+        for klen in (4, 8, 16, 32):
+            if klen > len(raw):
+                break
+            ext_key = (inferred_key * (klen // 4 + 1))[:klen]
+            dec = bytes(raw[i] ^ ext_key[i % klen] for i in range(len(raw)))
+            if valid_lua(dec):
+                return dec
+
+    if len(raw) >= 32:
+        for window in (4, 8, 16, 32):
+            if len(raw) <= window:
+                continue
+            derived = bytes((raw[i] ^ raw[i + window]) & 0xFF for i in range(window))
+            if any(derived):
+                dec = bytes(raw[i] ^ derived[i % window] for i in range(len(raw)))
+                if valid_lua(dec):
+                    return dec
+
+    for mult in (2, 3, 5, 7, 11, 17, 31, 127, 251):
+        for base_xk in range(256):
+            dec = bytes(((b * mult) ^ base_xk) & 0xFF for b in raw)
+            if valid_lua(dec):
+                return dec
+
+    rolling_variants = [
+        lambda i, b: (b ^ i) & 0xFF,
+        lambda i, b: (b ^ (i * 3 + 7)) & 0xFF,
+        lambda i, b: (b ^ (i * 5 + 11)) & 0xFF,
+        lambda i, b: (b - i) & 0xFF,
+        lambda i, b: (b + i) & 0xFF,
+        lambda i, b: (b ^ (0x5A + i * 17)) & 0xFF,
+        lambda i, b: (b ^ (i >> 1)) & 0xFF,
+        lambda i, b: (b ^ (0xA5 + i * 13)) & 0xFF,
+        lambda i, b: ((b >> 1) | ((b & 1) << 7)) & 0xFF,
+        lambda i, b: ((b << 1) | (b >> 7)) & 0xFF,
+    ]
+    for fn in rolling_variants:
+        dec = bytes(fn(i, b) for i, b in enumerate(raw))
+        if valid_lua(dec):
+            return dec
+
+    return None
+
+
+def upgrade_beautifier(src: str) -> str:
+    OPENERS = re.compile(
+        r'^\s*(?:(?:local\s+)?function\b|if\b.*\bthen\b|(?:for|while)\b.*\bdo\b|do\b|repeat\b|else\b|elseif\b.*\bthen\b)'
+    )
+    CLOSERS = re.compile(r'^\s*(?:end\b|until\b|else\b|elseif\b)')
+    INLINE = re.compile(
+        r'\b(?:if\b.*\bthen\b.*\bend\b|function\s*\([^)]*\)\s*[^;{]+end)'
+    )
+    IND = '  '
+
+    lines = src.split('\n')
+    out = []
+    depth = 0
+    in_long_string = False
+    long_level = None
+
+    for raw in lines:
+        line = raw.rstrip()
+
+        if not in_long_string:
+            ls_open = re.search(r'\[(=*)\[', line)
+            if ls_open and not re.search(r'--\s*\[' + re.escape(ls_open.group(1)) + r'\[', line):
+                level = ls_open.group(1)
+                if re.search(r'\]' + re.escape(level) + r'\]', line[ls_open.end():]) is None:
+                    in_long_string = True
+                    long_level = level
+                out.append(IND * depth + line.lstrip())
+                continue
+        else:
+            if re.search(r'\]' + re.escape(long_level or '') + r'\]', line):
+                in_long_string = False
+                long_level = None
+            out.append(line)
+            continue
+
+        stripped = line.lstrip()
+        if not stripped:
+            out.append('')
+            continue
+        if stripped.startswith('--'):
+            out.append(IND * depth + stripped)
+            continue
+
+        is_inline = bool(INLINE.search(stripped)) and stripped.count('end') >= stripped.count('function') + stripped.count(
+            'if') + stripped.count('for') + stripped.count('while')
+
+        is_closer = bool(CLOSERS.match(stripped)) and not is_inline
+        if is_closer:
+            depth = max(0, depth - 1)
+
+        out.append(IND * depth + stripped)
+
+        if not is_inline:
+            is_opener = bool(OPENERS.match(stripped))
+            if is_opener:
+                opens = len(re.findall(r'\b(?:function|then|do|repeat)\b', stripped))
+                closes = len(re.findall(r'\bend\b|\buntil\b', stripped))
+                net = opens - closes
+                if stripped.startswith('else') or stripped.startswith('elseif'):
+                    net = 1
+                depth = max(0, depth + net)
+        if is_closer and stripped.startswith(('else', 'elseif')):
+            depth += 1
+
+    return '\n'.join(out)
+
+
+def upgrade_control_flow_simplifier(src: str) -> str:
+    for _ in range(8):
+        prev = src
+        src = _collapse_trivial_gotos(src)
+        src = _unfold_dispatch_table(src)
+        src = _inline_single_return_fns(src)
+        src = _collapse_pcall_wrappers(src)
+        src = _strip_dead_assigns(src)
+        src = _normalize_bool_cmp(src)
+        src = _collapse_multi_assign_then_use(src)
+        if src == prev:
+            break
+    return src
+
+
+def _collapse_trivial_gotos(src: str) -> str:
+    src = re.sub(r'goto\s+label_(\d+)\s*\n\s*::label_\1::', '::label_\\1::', src)
+    src = re.sub(r'^[\t ]*::label_\d+::[\t ]*$', '', src, flags=re.MULTILINE)
+    return src
+
+
+def _unfold_dispatch_table(src: str) -> str:
+    tbl_pat = re.compile(
+        r'local\s+(\w+)\s*=\s*\{([^}]{0,2000})\}\s*\n'
+        r'(?:local\s+\w+\s*=\s*\w+\s*\n)?'
+        r'\1\[(\w+)\]\s*\(\)',
+        re.DOTALL
+    )
+
+    def repl(m):
+        tbl_name, body, key = m.group(1), m.group(2), m.group(3)
+        entries = re.findall(r'\[(\d+)\]\s*=\s*function\s*\(\s*\)\s*([\s\S]*?)end(?:\s*,)?', body)
+        if not entries or len(entries) > 64:
+            return m.group(0)
+        parts = []
+        for i, (idx, code) in enumerate(entries):
+            kw = 'if' if i == 0 else 'elseif'
+            parts.append(f'{kw} {key} == {idx} then\n{code.strip()}')
+        parts.append('end')
+        return '\n'.join(parts)
+
+    return tbl_pat.sub(repl, src)
+
+
+def _inline_single_return_fns(src: str) -> str:
+    pat = re.compile(
+        r'local\s+function\s+(\w+)\s*\(([^)]*)\)\s*\n\s*(return\s+[^\n]+)\s*\n\s*end\s*\n',
+        re.DOTALL
+    )
+    for m in list(pat.finditer(src)):
+        fname = m.group(1)
+        params_s = m.group(2).strip()
+        ret_expr = m.group(3).strip()[len('return'):].strip()
+        params = [p.strip() for p in params_s.split(',') if p.strip()] if params_s else []
+        call_pat = re.compile(
+            r'\b' + re.escape(fname) + r'\s*\(([^)]*)\)',
+            re.DOTALL
+        )
+        calls = list(call_pat.finditer(src))
+        if not calls:
+            src = src.replace(m.group(0), '')
+            continue
+        if len(calls) > 4:
+            continue
+        new_src = src.replace(m.group(0), '')
+        for call in reversed(calls):
+            args_s = call.group(1).strip()
+            args = [a.strip() for a in args_s.split(',') if a.strip()] if args_s else []
+            if len(args) != len(params):
+                break
+            sub_map = dict(zip(params, args))
+            inlined = ret_expr
+            for p, a in sub_map.items():
+                inlined = re.sub(r'\b' + re.escape(p) + r'\b', a, inlined)
+            new_src = new_src[:call.start()] + f'({inlined})' + new_src[call.end():]
+        else:
+            src = new_src
+    return src
+
+
+def _collapse_pcall_wrappers(src: str) -> str:
+    def repl(m):
+        body = m.group(1).strip()
+        if re.search(r'\berror\b|\bpcall\b|\bxpcall\b', body):
+            return m.group(0)
+        return body
+
+    src = re.sub(
+        r'pcall\s*\(\s*function\s*\(\s*\)\s*([\s\S]{1,500}?)end\s*\)',
+        repl, src
+    )
+    return src
+
+
+def _strip_dead_assigns(src: str) -> str:
+    for _ in range(4):
+        prev = src
+        pat = re.compile(r'^([ \t]*)(\w+)\s*=\s*[^\n]+\n(\s*\2\s*=\s*[^\n]+)', re.MULTILINE)
+        src = pat.sub(lambda m: m.group(3), src)
+        if src == prev:
+            break
+    return src
+
+
+def _normalize_bool_cmp(src: str) -> str:
+    src = re.sub(r'==\s*true\b', '', src)
+    src = re.sub(r'==\s*false\b', lambda m: '== false', src)
+    src = re.sub(r'~=\s*false\b', '', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*==\s*(\w+)\s*\)', r'\1 ~= \2', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*~=\s*(\w+)\s*\)', r'\1 == \2', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*<\s*(\w+)\s*\)', r'\1 >= \2', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*>\s*(\w+)\s*\)', r'\1 <= \2', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*<=\s*(\w+)\s*\)', r'\1 > \2', src)
+    src = re.sub(r'not\s+\(\s*(\w+)\s*>=\s*(\w+)\s*\)', r'\1 < \2', src)
+    return src
+
+
+def _collapse_multi_assign_then_use(src: str) -> str:
+    for _ in range(4):
+        prev = src
+        pat = re.compile(r'local\s+(\w+)\s*=\s*([^\n;]+)\n\s*local\s+(\w+)\s*=\s*\1\b(?!\s*\[)')
+
+        def repl(m):
+            name, val, name2 = m.group(1), m.group(2).strip(), m.group(3)
+            rest = src[m.end():]
+            count = len(re.findall(r'\b' + re.escape(name) + r'\b', rest))
+            if count == 0:
+                return f'local {name2} = {val}'
+            return m.group(0)
+
+        src = pat.sub(repl, src)
+        if src == prev:
+            break
+    return src
+
+
+def upgrade_lua_codegen_postprocess(code: str) -> str:
+    code = _resolve_forloop_gotos(code)
+    code = _resolve_while_gotos(code)
+    code = _resolve_if_gotos(code)
+    code = _clean_orphan_labels(code)
+    code = _clean_empty_lines(code)
+    return code
+
+
+def _resolve_forloop_gotos(code: str) -> str:
+    pat = re.compile(
+        r'(\w+)\s*=\s*\1\s*-\s*(\w+)\s*\n'
+        r'goto\s+(label_\d+)\s*\n'
+        r'::\3::\s*\n'
+        r'(\w+)\s*=\s*\1\s*\+\s*\2\s*\n'
+        r'if\s+\1\s*<=\s*(\w+)\s*then\s*goto\s+(label_\d+)\s*end',
+        re.MULTILINE
+    )
+
+    def repl(m):
+        var, step, entry_lbl = m.group(1), m.group(2), m.group(3)
+        limit, body_lbl = m.group(5), m.group(6)
+        return f'for {var} = {var} + {step}, {limit}, {step} do\n  ::body_{body_lbl}::'
+
+    return pat.sub(repl, code)
+
+
+def _resolve_while_gotos(code: str) -> str:
+    pat = re.compile(
+        r'::(label_\d+)::\s*\n'
+        r'if\s+(.+?)\s+then\s+goto\s+(label_\d+)\s+end\s*\n'
+        r'([\s\S]{0,1000}?)'
+        r'goto\s+\1\s*\n'
+        r'::\3::',
+        re.MULTILINE
+    )
+
+    def repl(m):
+        cond, exit_lbl, body = m.group(2), m.group(3), m.group(4)
+        negated = _negate_cond(cond)
+        body_clean = body.strip()
+        return f'while {negated} do\n{body_clean}\nend\n::{exit_lbl}::'
+
+    return pat.sub(repl, code)
+
+
+def _resolve_if_gotos(code: str) -> str:
+    pat = re.compile(
+        r'if\s+(.+?)\s+then\s+goto\s+(label_\d+)\s+end\s*\n'
+        r'([\s\S]{0,500}?)'
+        r'goto\s+(label_\d+)\s*\n'
+        r'::\2::\s*\n'
+        r'([\s\S]{0,500}?)'
+        r'::\4::',
+        re.MULTILINE
+    )
+
+    def repl(m):
+        cond, then_lbl = m.group(1), m.group(2)
+        else_body = m.group(3).strip()
+        end_lbl = m.group(4)
+        then_body = m.group(5).strip()
+        negated = _negate_cond(cond)
+        if else_body:
+            return f'if {negated} then\n{then_body}\nelse\n{else_body}\nend\n::{end_lbl}::'
+        return f'if {negated} then\n{then_body}\nend\n::{end_lbl}::'
+
+    return pat.sub(repl, code)
+
+
+def _negate_cond(cond: str) -> str:
+    cond = cond.strip()
+    m = re.match(r'(.+?)\s*(==|~=|<=|>=|<|>)\s*(.+)', cond)
+    if m:
+        a, op, b = m.group(1), m.group(2), m.group(3)
+        inv = {'==': '~=', '~=': '==', '<': '>=', '>': '<=', '<=': '>', '>=': '<'}
+        return f'{a} {inv.get(op, op)} {b}'
+    if cond.startswith('not '):
+        return cond[4:]
+    return f'not ({cond})'
+
+
+def _clean_orphan_labels(code: str) -> str:
+    labels = set(re.findall(r'::(label_\d+)::', code))
+    gotos = set(re.findall(r'\bgoto\s+(label_\d+)\b', code))
+    orphans = labels - gotos
+    for lbl in orphans:
+        code = re.sub(r'\s*::' + re.escape(lbl) + r'::\s*', '\n', code)
+    return code
+
+
+def _clean_empty_lines(code: str) -> str:
+    code = re.sub(r'\n{3,}', '\n\n', code)
+    code = re.sub(r'^\s+$', '', code, flags=re.MULTILINE)
+    return code.strip()
+
+
+def upgrade_vm_lifter(splitter, bytecode, source: str) -> Optional[str]:
+    if not splitter.handler_infos:
+        return None
+    opcode_map = {k: v.semantic for k, v in splitter.handler_infos.items() if v.semantic}
+    if len(opcode_map) < 4:
+        return None
+
+    raw_bytes = _lift_collect_raw(splitter, bytecode)
+    if raw_bytes is None or len(raw_bytes) < 12:
+        return None
+
+    constants = _lift_collect_constants(splitter)
+
+    def score_output(lines: List[str]) -> float:
+        if not lines:
+            return 0.0
+        text = '\n'.join(lines)
+        s = 0.0
+        for kw, w in [('local ', 3.5), ('return', 3.0), ('function', 3.0),
+                      ('if ', 2.5), ('then', 2.0), ('for ', 2.5),
+                      ('while ', 2.0), ('end', 2.0), ('do ', 1.5),
+                      ('_ENV[', 2.0), ('()', 1.5)]:
+            s += text.count(kw) * w
+        real = [l for l in lines if l.strip() and not l.strip().startswith('::')]
+        s += len(real) * 0.8
+        s -= text.count('R_') * 0.5
+        s -= text.count('v_') * 0.3
+        s -= text.count('K[') * 0.4
+        if not any(kw in text for kw in ('local', 'return', 'function', 'if', 'for')):
+            s -= 20
+        return s
+
+    base = {
+        'word_size': splitter.instruction_word_size or 4,
+        'endian': splitter.instruction_endian or 'little',
+        'opcode_width': splitter.opcode_bit_width or 6,
+        'opcode_shift': splitter.opcode_shift or 0,
+        'a_shift': splitter.a_shift or 6,
+        'a_width': splitter.a_width or 8,
+        'b_shift': splitter.b_shift or 23,
+        'b_width': splitter.b_width or 9,
+        'c_shift': splitter.c_shift or 14,
+        'c_width': splitter.c_width or 9,
+    }
+
+    standard_layouts = [
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 8, 'b_shift': 23, 'b_width': 9, 'c_shift': 14, 'c_width': 9},
+        {'word_size': 4, 'endian': 'big', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 8, 'b_shift': 23, 'b_width': 9, 'c_shift': 14, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 8, 'b_shift': 14, 'b_width': 9, 'c_shift': 23, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 8, 'opcode_shift': 0,
+         'a_shift': 8, 'a_width': 8, 'b_shift': 16, 'b_width': 8, 'c_shift': 24, 'c_width': 8},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 5, 'opcode_shift': 0,
+         'a_shift': 5, 'a_width': 8, 'b_shift': 13, 'b_width': 9, 'c_shift': 22, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 7, 'opcode_shift': 0,
+         'a_shift': 7, 'a_width': 9, 'b_shift': 16, 'b_width': 8, 'c_shift': 24, 'c_width': 8},
+        {'word_size': 8, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 8, 'b_shift': 23, 'b_width': 9, 'c_shift': 14, 'c_width': 9},
+        {'word_size': 2, 'endian': 'little', 'opcode_width': 4, 'opcode_shift': 0,
+         'a_shift': 4, 'a_width': 4, 'b_shift': 8, 'b_width': 4, 'c_shift': 12, 'c_width': 4},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 26,
+         'a_shift': 18, 'a_width': 8, 'b_shift': 9, 'b_width': 9, 'c_shift': 0, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 10,
+         'a_shift': 2, 'a_width': 8, 'b_shift': 20, 'b_width': 6, 'c_shift': 26, 'c_width': 6},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 8, 'b_shift': 14, 'b_width': 9, 'c_shift': 23, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 6, 'opcode_shift': 0,
+         'a_shift': 6, 'a_width': 9, 'b_shift': 15, 'b_width': 8, 'c_shift': 23, 'c_width': 9},
+        {'word_size': 4, 'endian': 'little', 'opcode_width': 8, 'opcode_shift': 24,
+         'a_shift': 16, 'a_width': 8, 'b_shift': 8, 'b_width': 8, 'c_shift': 0, 'c_width': 8},
+        base,
+    ]
+
+    seen_layouts = []
+    uniq_layouts = []
+    for lay in standard_layouts:
+        key = tuple(sorted(lay.items()))
+        if key not in seen_layouts:
+            seen_layouts.append(key)
+            uniq_layouts.append(lay)
+
+    best_code = None
+    best_score = -1.0
+    EARLY_EXIT_THRESHOLD = 120.0
+
+    for layout in uniq_layouts:
+        for rotation in [0] + list(range(1, 64)):
+            try:
+                from_mod = _try_lift_with_layout(
+                    raw_bytes, layout, rotation,
+                    opcode_map, splitter.handler_infos, constants
+                )
+                if from_mod is None:
+                    continue
+                sc = score_output(from_mod)
+                if sc > best_score:
+                    best_score = sc
+                    best_code = '\n'.join(from_mod)
+                    if sc >= EARLY_EXIT_THRESHOLD:
+                        break
+            except Exception:
+                continue
+        if best_score >= EARLY_EXIT_THRESHOLD:
+            break
+
+    if best_code and best_score > 8:
+        best_code = upgrade_lua_codegen_postprocess(best_code)
+        return best_code
+    return None
+
+
+def _try_lift_with_layout(raw_bytes, layout, rotation, opcode_map, handler_infos, constants):
+    from collections import namedtuple
+    word_size = layout.get('word_size', 4)
+    endian = layout.get('endian', 'little')
+    opcode_width = layout.get('opcode_width', 6)
+    opcode_shift = layout.get('opcode_shift', 0)
+    a_shift = layout.get('a_shift', 6)
+    a_width = layout.get('a_width', 8)
+    b_shift = layout.get('b_shift', 23)
+    b_width = layout.get('b_width', 9)
+    c_shift = layout.get('c_shift', 14)
+    c_width = layout.get('c_width', 9)
+
+    mk = lambda w: (1 << w) - 1
+
+    fmt_map = {1: 'B', 2: 'H', 4: 'I', 8: 'Q'}
+    if word_size not in fmt_map:
+        return None
+    fmt = ('<' if endian == 'little' else '>') + fmt_map[word_size]
+
+    words = []
+    for i in range(0, len(raw_bytes) - word_size + 1, word_size):
+        chunk = raw_bytes[i:i + word_size]
+        if len(chunk) < word_size:
+            break
+        try:
+            words.append(struct.unpack(fmt, chunk)[0])
+        except Exception:
+            break
+
+    if not words:
+        return None
+
+    if rotation and rotation < len(words):
+        words = words[rotation:] + words[:rotation]
+
+    Instr = namedtuple('Instr', ['opcode', 'A', 'B', 'C', 'Bx', 'sBx', 'semantic', 'index'])
+
+    instrs = []
+    for idx, w in enumerate(words):
+        opcode = (w >> opcode_shift) & mk(opcode_width)
+        A = (w >> a_shift) & mk(a_width)
+        B = (w >> b_shift) & mk(b_width)
+        C = (w >> c_shift) & mk(c_width)
+        Bx = (B << c_width) | C
+        sBx = Bx - ((1 << (b_width + c_width - 1)) - 1)
+        sem = opcode_map.get(opcode)
+        instrs.append(Instr(opcode, A, B, C, Bx, sBx, sem, idx))
+
+    if not instrs:
+        return None
+
+    recognized = sum(1 for i in instrs if i.semantic)
+    if recognized / len(instrs) < 0.18:
+        return None
+
+    return upgrade_vm_emulator_execute(instrs, handler_infos, constants)
+
+
+def _lift_collect_raw(splitter, bytecode) -> Optional[bytes]:
+    if bytecode:
+        try:
+            return bytes([b & 0xFF for b in bytecode])
+        except Exception:
+            pass
+    if getattr(splitter, 'instruction_array_body', None):
+        nums = re.findall(r'0x[0-9a-fA-F]+|\d+', splitter.instruction_array_body)
+        if len(nums) >= 8:
+            try:
+                return bytes([int(x, 0) & 0xFF for x in nums])
+            except Exception:
+                pass
+    return None
+
+
+def _lift_collect_constants(splitter) -> List[Any]:
+    consts = []
+    body = getattr(splitter, 'constant_pool', '') or ''
+    if not body:
+        return consts
+    for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', body):
+        try:
+            consts.append(bytes(m.group(1), 'utf-8').decode('unicode_escape'))
+        except Exception:
+            consts.append(m.group(1))
+    for m in re.finditer(r"'((?:[^'\\]|\\.)*)'", body):
+        consts.append(m.group(1))
+    for m in re.finditer(r'\b(0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b', body):
+        try:
+            consts.append(int(m.group(1), 0))
+        except Exception:
+            try:
+                consts.append(float(m.group(1)))
+            except Exception:
+                pass
+    return consts
+
+
+def upgrade_chunk_deobfuscator(src: str) -> str:
+    enc = _detect_encoding_advanced(src)
+
+    if enc == 'base64':
+        padded = src.strip() + '=' * (-len(src.strip()) % 4)
+        try:
+            import base64 as b64
+            dec = b64.b64decode(padded)
+            for codec in ('utf-8', 'latin-1', 'ascii'):
+                try:
+                    text = dec.decode(codec)
+                    if _looks_like_lua(text):
+                        return text
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            import base64 as b64
+            dec = b64.b85decode(src.strip())
+            text = dec.decode('utf-8', errors='replace')
+            if _looks_like_lua(text):
+                return text
+        except Exception:
+            pass
+        try:
+            import base64 as b64
+            dec = b64.b32decode(src.strip().upper())
+            text = dec.decode('utf-8', errors='replace')
+            if _looks_like_lua(text):
+                return text
+        except Exception:
+            pass
+
+    elif enc == 'hex':
+        raw_hex = re.sub(r'\s+', '', src)
+        try:
+            dec = bytes.fromhex(raw_hex)
+            for codec in ('utf-8', 'latin-1'):
+                try:
+                    text = dec.decode(codec)
+                    if _looks_like_lua(text):
+                        return text
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    elif enc == 'zlib':
+        try:
+            import zlib, base64 as b64
+            dec = zlib.decompress(b64.b64decode(src.strip()))
+            text = dec.decode('utf-8', errors='replace')
+            if _looks_like_lua(text):
+                return text
+        except Exception:
+            pass
+
+    elif enc == 'url':
+        from urllib.parse import unquote
+        text = unquote(src)
+        if _looks_like_lua(text):
+            return text
+
+    elif enc == 'rot13':
+        import codecs
+        text = codecs.decode(src, 'rot_13')
+        if _looks_like_lua(text):
+            return text
+
+    elif enc == 'reversed':
+        text = src[::-1]
+        if _looks_like_lua(text):
+            return text
+
+    return src
+
+
+def _detect_encoding_advanced(src: str) -> str:
+    stripped = src.strip()
+    if not stripped:
+        return 'lua'
+    if re.match(r'^[A-Za-z0-9+/\n\r\t]+=*$', stripped) and len(stripped) % 4 < 3:
+        return 'base64'
+    if re.match(r'^[0-9a-fA-F\s]+$', stripped) and len(re.sub(r'\s+', '', stripped)) % 2 == 0:
+        return 'hex'
+    if re.match(r'^%[0-9A-Fa-f]{2}', stripped[:9]):
+        return 'url'
+    import zlib
+    try:
+        zlib.decompress(stripped.encode('latin-1'))
+        return 'zlib'
+    except Exception:
+        pass
+    if stripped == stripped[::-1][::-1] and re.match(r'^[a-zA-Z0-9\s\[\]{}=,\.\'"]+$', stripped[:60]):
+        pass
+    if stripped.startswith('\x1bLua'):
+        return 'lua_binary'
+    return 'lua'
+
+
+def _looks_like_lua(text: str) -> bool:
+    if not text:
+        return False
+    if not all(32 <= ord(c) < 127 or c in '\n\r\t' for c in text[:512]):
+        return False
+    kws = ['local ', 'function', 'return', 'end', 'then', 'do ', 'if ', 'for ', 'while ']
+    return sum(1 for kw in kws if kw in text) >= 2
+
+
+def upgrade_pipeline_post_lift(code: str, vm_type: str) -> str:
+    code = re.sub(r'\bR(\d+)\b', r'reg_\1', code)
+    code = re.sub(r'\bL(\d+)\b', r'label_\1', code)
+    code = re.sub(r'\b_\s*=\s*_\b', '', code)
+    code = re.sub(r'^[ \t]*$\n', '', code, flags=re.MULTILINE)
+    code = re.sub(r'\n{3,}', '\n\n', code)
+
+    code = upgrade_lua_codegen_postprocess(code)
+    code = upgrade_control_flow_simplifier(code)
+
+    if 'luraph' in vm_type.lower():
+        code = re.sub(r'reg_(\d+)\s*=\s*_ENV\["(.+?)"\]', r'\2 = _ENV["\2"]', code)
+        code = re.sub(r'local\s+reg_\d+\s*=\s*select\s*\(', 'local _sel = select(', code)
+    elif 'moonsec' in vm_type.lower():
+        code = re.sub(r'reg_(\d+)\s*=\s*\{\}', r'local tbl_\1 = {}', code)
+    elif 'ironbrew' in vm_type.lower():
+        code = re.sub(r'Upval_(\d+)', r'upval_\1', code)
+
+    code = re.sub(r'\(\s*reg_\d+\s*\)', lambda m: m.group(0), code)
+    code = re.sub(r'\breg_(\d+)\s*=\s*reg_\1\b', '', code)
+    code = re.sub(r'^\s*$', '', code, flags=re.MULTILINE)
+    code = code.strip()
+    return code
+
+
 class ConstantTracker:
     def __init__(self):
         self.known_values = {
@@ -257,7 +2187,7 @@ class StringCharEliminator:
     def eliminate(source: str) -> str:
         prev = None
         rounds = 0
-        while prev != source and rounds < 10:
+        while prev != source and rounds < 12:
             prev = source
             source = StringCharEliminator._fold_simple(source)
             source = StringCharEliminator._fold_concat(source)
@@ -277,26 +2207,33 @@ class StringCharEliminator:
                     return m.group(0)
                 chars = "".join(chr(n) for n in nums)
                 if all(32 <= ord(c) < 127 or c in "\n\r\t" for c in chars):
-                    esc = chars.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+                    esc = chars.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r",
+                                                                                                        "\\r").replace(
+                        "\t", "\\t")
                     return '"' + esc + '"'
             except Exception:
                 pass
             return m.group(0)
+
         return re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)*\d+)\s*\)", repl, source)
 
     @staticmethod
     def _fold_concat(source: str) -> str:
         pattern = re.compile(r"(?:string\.char\(\s*\d+\s*\)\s*\.\.\s*)+string\.char\(\s*\d+\s*\)")
+
         def repl(m):
             nums = re.findall(r"string\.char\(\s*(\d+)\s*\)", m.group(0))
             try:
                 chars = "".join(chr(int(n) & 0xFF) for n in nums)
                 if all(32 <= ord(c) < 127 or c in "\n\r\t" for c in chars):
-                    esc = chars.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+                    esc = chars.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r",
+                                                                                                        "\\r").replace(
+                        "\t", "\\t")
                     return '"' + esc + '"'
             except Exception:
                 pass
             return m.group(0)
+
         return pattern.sub(repl, source)
 
     @staticmethod
@@ -305,6 +2242,7 @@ class StringCharEliminator:
             inner = m.group(1)
             if "string.char" not in inner:
                 return m.group(0)
+
             def sub_repl(sm):
                 nums = [int(x.strip()) for x in sm.group(1).split(",") if x.strip()]
                 if not nums or any(n < 0 or n > 255 for n in nums):
@@ -314,7 +2252,9 @@ class StringCharEliminator:
                     esc = chars.replace("\\", "\\\\").replace('"', '\\"')
                     return '"' + esc + '"'
                 return sm.group(0)
+
             return "{" + re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)*\d+)\s*\)", sub_repl, inner) + "}"
+
         return re.sub(r"\{([^{}]*string\.char[^{}]*)\}", repl, source)
 
     @staticmethod
@@ -323,15 +2263,18 @@ class StringCharEliminator:
             content = m.group(1)
             if len(re.findall(r"\\\d{1,3}", content)) < 4:
                 return m.group(0)
+
             def sub_repl(sm):
                 n = int(sm.group(1))
                 if 32 <= n < 127:
                     return chr(n)
                 return sm.group(0)
+
             decoded = re.sub(r"\\(\d{1,3})", sub_repl, content)
             if decoded != content and "\\" not in decoded:
                 return '"' + decoded + '"'
             return m.group(0)
+
         return re.sub(r'"((?:\\\d{1,3}){4,})"', repl, source)
 
     @staticmethod
@@ -349,12 +2292,14 @@ class StringCharEliminator:
             except Exception:
                 pass
             return m.group(0)
+
         return re.sub(r'"((?:\\x[0-9a-fA-F]{2}){4,})"', repl, source)
 
     @staticmethod
     def _fold_chr_concat(source: str) -> str:
         def repl(m):
             return m.group(1) + m.group(2)
+
         prev = None
         rounds = 0
         while prev != source and rounds < 4:
@@ -372,7 +2317,7 @@ class JunkCodeEliminator:
         src = self.source
         prev = None
         rounds = 0
-        while prev != src and rounds < 8:
+        while prev != src and rounds < 15:
             prev = src
             src = self._remove_empty_functions(src)
             src = self._remove_self_assignments(src)
@@ -380,12 +2325,46 @@ class JunkCodeEliminator:
             src = self._remove_always_true(src)
             src = self._remove_dead_loops(src)
             src = self._remove_noop_ops(src)
+            src = self._fold_const_arith(src)
             src = self._remove_unused_locals(src)
             src = self._remove_redundant_blocks(src)
             src = self._remove_nil_assigns(src)
             src = self._remove_double_negation(src)
             src = self._remove_redundant_parens(src)
+            src = self._remove_junk_control_flow(src)
             rounds += 1
+        src = _upgrade_junk_code_eliminator(src)
+        return src
+
+    def _fold_const_arith(self, src: str) -> str:
+        def eval_simple(m):
+            expr = m.group(0).replace(" ", "")
+            expr = expr.replace("+-", "-").replace("--", "+")
+            try:
+                if re.fullmatch(r"-?\d+(?:[+\-]\-?\d+){1,6}", expr):
+                    v = int(eval(expr, {"__builtins__": {}}, {}))
+                    if abs(v) < 2 ** 31:
+                        return str(v)
+            except Exception:
+                pass
+            return m.group(0)
+
+        for _ in range(8):
+            prev = src
+            src = re.sub(r"(?<![\w.])-?\d+\s*[+\-]\s*-?\d+(?:\s*[+\-]\s*-?\d+){0,5}(?![\w.])", eval_simple, src)
+            src = re.sub(r"\((-?\d+(?:\s*[+\-]\s*-?\d+){1,6})\)", eval_simple, src)
+            if src == prev:
+                break
+        return src
+
+    def _remove_junk_control_flow(self, src: str) -> str:
+        src = re.sub(
+            r"repeat\s+local\s+\w+\s*=\s*nil\s*;?\s*local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;?\s*local\s+\w+\s*=\s*nil\s*;?",
+            "repeat ", src
+        )
+        src = re.sub(r"local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;?", "", src)
+        src = re.sub(r"do\s+do\s+", "do ", src)
+        src = re.sub(r"end\s+end\s+end", "end end", src)
         return src
 
     def _remove_empty_functions(self, src: str) -> str:
@@ -446,7 +2425,7 @@ class JunkCodeEliminator:
         return src
 
     def _remove_unused_locals(self, src: str) -> str:
-        for _ in range(3):
+        for _ in range(4):
             decls = list(re.finditer(r"local\s+(\w+)\s*=\s*[^\n;]+", src))
             for m in reversed(decls):
                 name = m.group(1)
@@ -996,6 +2975,9 @@ class VMSplitter:
                 pass
 
     def _detect_vm_vars(self):
+        self.pc_var, self.stack_var, self.const_var = upgrade_vm_splitter_detect_vars(
+            self.source, self.pc_var, self.stack_var, self.const_var
+        )
         pc_patterns = [
             r"local\s+(\w+)\s*=\s*1\s*;?\s*while\s+true\s+do",
             r"local\s+(\w+)\s*=\s*1\s*;?\s*while\s+\w+\s*<",
@@ -1164,7 +3146,8 @@ class VMSplitter:
             result["decode_loop_xor_ops"] = best_score
 
     def _find_case_tables(self, result: Dict[str, Any]):
-        for m in re.finditer(r"local\s+(\w+)\s*=\s*\{\s*\}\s*;?\s*[\w\s]*?(\w+)\[(\d+)\]\s*=\s*function", self.source, re.DOTALL):
+        for m in re.finditer(r"local\s+(\w+)\s*=\s*\{\s*\}\s*;?\s*[\w\s]*?(\w+)\[(\d+)\]\s*=\s*function", self.source,
+                             re.DOTALL):
             self.case_table = m.group(1)
             result["case_table"] = m.group(1)
             return
@@ -1277,68 +3260,104 @@ class VMSplitter:
             self.handler_function_name = None
 
     def _extract_handlers_from_text(self, text: str, global_offset: int):
-        i = 0
         n = len(text)
+        i = 0
+
+        def _skip_long_str(s: str, pos: int) -> int:
+            if pos >= len(s) or s[pos] != '[':
+                return pos
+            j = pos + 1
+            eq = 0
+            while j < len(s) and s[j] == '=':
+                eq += 1
+                j += 1
+            if j >= len(s) or s[j] != '[':
+                return pos
+            close = ']' + '=' * eq + ']'
+            end = s.find(close, j + 1)
+            return end + len(close) if end >= 0 else len(s)
+
+        def _scan_body_end(s: str, body_start: int) -> int:
+            depth = 0
+            j = body_start
+            sn = len(s)
+            while j < sn:
+                c = s[j]
+                if c in ('"', "'"):
+                    j = self._skip_local_string(s, j)
+                    continue
+                if c == '[' and j + 1 < sn and s[j + 1] in ('[', '='):
+                    nj = _skip_long_str(s, j)
+                    if nj > j + 1:
+                        j = nj
+                        continue
+                if c == '-' and j + 1 < sn and s[j + 1] == '-':
+                    j += 2
+                    while j < sn and s[j] != '\n':
+                        j += 1
+                    continue
+                if c.isalpha() or c == '_':
+                    ws = j
+                    while j < sn and (s[j].isalnum() or s[j] == '_'):
+                        j += 1
+                    w = s[ws:j]
+                    if w in ('if', 'for', 'while', 'function', 'do', 'repeat'):
+                        depth += 1
+                    elif w in ('end', 'until'):
+                        if depth == 0:
+                            return ws
+                        depth -= 1
+                    continue
+                j += 1
+            return -1
+
         while i < n:
-            m = re.search(r"\b(if|elseif)\b", text[i:])
+            m = re.search(r'\b(if|elseif)\b', text[i:])
             if not m:
                 break
             kw_start = i + m.start()
             kw = m.group(1)
             cond_start = kw_start + len(kw)
-            eq_match = re.search(r"==\s*(0x[0-9a-fA-F]+|\d+)", text[cond_start:cond_start + 200])
+
+            eq_match = re.search(r'==\s*(0x[0-9a-fA-F]+|\d+)', text[cond_start:cond_start + 300])
             if not eq_match:
-                i = kw_start + len(kw)
+                i = kw_start + len(kw) + 1
                 continue
-            num_str = eq_match.group(1)
             try:
-                case_num = int(num_str, 0)
+                case_num = int(eq_match.group(1), 0)
             except Exception:
-                i = kw_start + len(kw)
+                i = kw_start + len(kw) + 1
                 continue
-            then_match = re.search(r"\bthen\b", text[cond_start:cond_start + 400])
+
+            then_match = re.search(r'\bthen\b', text[cond_start:cond_start + 500])
             if not then_match:
-                i = kw_start + len(kw)
+                i = kw_start + len(kw) + 1
                 continue
             body_start = cond_start + then_match.end()
-            depth = 0
-            j = body_start
-            end_pos = -1
-            s = text
-            while j < n:
-                c = s[j]
-                if c in "\"'":
-                    j = self._skip_local_string(s, j)
-                    continue
-                if c == "-" and j + 1 < n and s[j + 1] == "-":
-                    while j < n and s[j] != "\n":
-                        j += 1
-                    continue
-                if c.isalpha() or c == "_":
-                    ws = j
-                    while j < n and (s[j].isalnum() or s[j] == "_"):
-                        j += 1
-                    w = s[ws:j]
-                    if w in ("if", "for", "while", "function", "do", "repeat", "then"):
-                        depth += 1
-                    elif w in ("end", "until"):
-                        if depth == 0:
-                            end_pos = ws
-                            break
-                        depth -= 1
-                        if depth == 0:
-                            end_pos = ws
-                            break
-                    continue
-                j += 1
+
+            end_pos = _scan_body_end(text, body_start)
             if end_pos < 0:
-                i = kw_start + len(kw)
+                i = kw_start + len(kw) + 1
                 continue
+
             handler_body = text[body_start:end_pos].strip()
-            if case_num not in self.handlers or len(handler_body) > len(self.handlers.get(case_num, "")):
+            if handler_body and (case_num not in self.handlers or
+                                 len(handler_body) > len(self.handlers.get(case_num, ''))):
                 self.handlers[case_num] = handler_body
                 self.handler_offsets[case_num] = (global_offset + body_start, global_offset + end_pos)
             i = end_pos + 3
+
+        for fm in re.finditer(r'\[(\d+)\]\s*=\s*function\s*\([^)]*\)\s*', text):
+            case_num = int(fm.group(1))
+            body_start = fm.end()
+            end_pos = _scan_body_end(text, body_start)
+            if end_pos < 0:
+                continue
+            handler_body = text[body_start:end_pos].strip()
+            if handler_body and (case_num not in self.handlers or
+                                 len(handler_body) > len(self.handlers.get(case_num, ''))):
+                self.handlers[case_num] = handler_body
+                self.handler_offsets[case_num] = (global_offset + body_start, global_offset + end_pos)
 
     @staticmethod
     def _skip_local_string(s: str, i: int) -> int:
@@ -1434,24 +3453,7 @@ class VMSplitter:
             self.handler_infos[case_num] = info
 
     def _classify_handler_semantic(self, text: str) -> Tuple[Optional[str], float, int]:
-        best_sem: Optional[str] = None
-        best_score = 0.0
-        best_eff = 0
-        for sem, patterns, base_conf, eff in VM_PATTERN_TABLE:
-            score = 0.0
-            for pat in patterns:
-                try:
-                    if re.search(pat, text, re.IGNORECASE):
-                        score += 1.0
-                except re.error:
-                    pass
-            if score > 0:
-                conf = min(base_conf + 0.03 * (score - 1), 0.99)
-                if conf > best_score:
-                    best_score = conf
-                    best_sem = sem
-                    best_eff = eff
-        return best_sem, best_score, best_eff
+        return upgrade_vm_handler_classify(text)
 
     def _infer_opcode_map(self):
         for case_num, info in self.handler_infos.items():
@@ -1466,7 +3468,8 @@ class VMSplitter:
             conv["const"] = self.const_var
         if self.pc_var:
             conv["pc"] = self.pc_var
-        m = re.search(r"(\w+)\s*\[\s*(\w+)\s*\]\s*=\s*(\w+)\s*\[\s*(\w+)\s*\]\s*([+\-*/%])\s*(\w+)\s*\[\s*(\w+)\s*\]", self.source)
+        m = re.search(
+            r"(\w+)\s*\[\s*(\w+)\s*\]\s*=\s*(\w+)\s*\[\s*(\w+)\s*\]\s*([+\-*/%])\s*(\w+)\s*\[\s*(\w+)\s*\]", self.source)
         if m:
             conv["arith_var"] = m.group(1)
         self.vm_register_convention = conv
@@ -1489,18 +3492,18 @@ class VMSplitter:
 
 class VMBytecodeDecoder:
     def __init__(
-        self,
-        opcode_map: Dict[int, str],
-        word_size: int = 4,
-        endian: str = "little",
-        opcode_width: int = 6,
-        opcode_shift: int = 0,
-        a_shift: int = 6,
-        a_width: int = 8,
-        b_shift: int = 23,
-        b_width: int = 9,
-        c_shift: int = 14,
-        c_width: int = 9,
+            self,
+            opcode_map: Dict[int, str],
+            word_size: int = 4,
+            endian: str = "little",
+            opcode_width: int = 6,
+            opcode_shift: int = 0,
+            a_shift: int = 6,
+            a_width: int = 8,
+            b_shift: int = 23,
+            b_width: int = 9,
+            c_shift: int = 14,
+            c_width: int = 9,
     ):
         self.opcode_map = opcode_map
         self.word_size = word_size
@@ -1557,12 +3560,12 @@ class VMBytecodeDecoder:
 
 class VMEmulator:
     def __init__(
-        self,
-        instructions: List[VMInstruction],
-        handler_infos: Dict[int, VMHandlerInfo],
-        constants: List[Any],
-        max_registers: int = 256,
-        max_steps: int = 500000,
+            self,
+            instructions: List[VMInstruction],
+            handler_infos: Dict[int, VMHandlerInfo],
+            constants: List[Any],
+            max_registers: int = 256,
+            max_steps: int = 500000,
     ):
         self.instructions = instructions
         self.handler_infos = handler_infos
@@ -1621,6 +3624,12 @@ class VMEmulator:
         return None
 
     def execute(self) -> List[str]:
+        upgraded_out = upgrade_vm_emulator_execute(
+            self.instructions, self.handler_infos, self.constants
+        )
+        if upgraded_out:
+            self.output_lines = upgraded_out
+            return self.output_lines
         steps = 0
         while 0 <= self.pc < len(self.instructions) and steps < self.max_steps:
             instr = self.instructions[self.pc]
@@ -1770,10 +3779,10 @@ class VMEmulator:
 
 class VMLifter:
     def __init__(
-        self,
-        source: str,
-        splitter: VMSplitter,
-        bytecode: Optional[List[int]] = None,
+            self,
+            source: str,
+            splitter: VMSplitter,
+            bytecode: Optional[List[int]] = None,
     ):
         self.source = source
         self.splitter = splitter
@@ -1781,6 +3790,9 @@ class VMLifter:
         self.output: List[str] = []
 
     def lift(self) -> Optional[str]:
+        upgraded = upgrade_vm_lifter(self.splitter, self.bytecode, self.source)
+        if upgraded:
+            return upgraded
         if not self.splitter.handler_infos:
             return None
         opcode_map = {k: v.semantic for k, v in self.splitter.handler_infos.items() if v.semantic}
@@ -2151,6 +4163,7 @@ class AdvancedCleanup:
                 return str(eval(m.group(0)))
             except Exception:
                 return m.group(0)
+
         return re.sub(r"\b\d+\s*[\+\-\*\/\%]\s*\d+\b", fold, code)
 
     @staticmethod
@@ -2922,12 +4935,12 @@ class LuaParser:
         t = self.advance()
         exprs = []
         if not (
-            self.check(TokenType.KEYWORD, "end")
-            or self.check(TokenType.KEYWORD, "else")
-            or self.check(TokenType.KEYWORD, "elseif")
-            or self.check(TokenType.KEYWORD, "until")
-            or self.check(TokenType.EOF)
-            or self.check(TokenType.PUNCT, ";")
+                self.check(TokenType.KEYWORD, "end")
+                or self.check(TokenType.KEYWORD, "else")
+                or self.check(TokenType.KEYWORD, "elseif")
+                or self.check(TokenType.KEYWORD, "until")
+                or self.check(TokenType.EOF)
+                or self.check(TokenType.PUNCT, ";")
         ):
             exprs = self.parse_expr_list()
         self.match(TokenType.PUNCT, ";")
@@ -3278,13 +5291,8 @@ class VMFingerprint:
     LURAPH_V14 = "luraph_v14"
     LUAOBFUSCATOR = "luaobfuscator"
     BORONIDE = "boronide"
+    XHIDER = "xhider"
     BYTECODE_LUA = "bytecode_lua"
-    AZTUPBREW = "aztupbrew"
-    XFUSCATOR = "xfuscator"
-    HYPERION = "hyperion"
-    PSU = "psu"
-    WEAREDEVS = "wearedevs"
-    LUACC = "luacc"
     SIMPLE = "simple"
     UNKNOWN = "unknown"
 
@@ -3323,12 +5331,12 @@ class VMFingerprint:
             r"boronide", r"Boronide", r"Boron Obfuscator",
             r"BoronObf", r"boron-",
         ],
-        AZTUPBREW: [r"AztupBrew", r"aztupbrew", r"Aztup"],
-        XFUSCATOR: [r"XFuscator", r"xfuscator", r"x-fuscator"],
-        HYPERION: [r"Hyperion", r"hyperion_obf", r"HyperionObf"],
-        PSU: [r"PSU\s*Obfuscator", r"psu_obf", r"PSU4|PSU5"],
-        WEAREDEVS: [r"WeAreDevs", r"wearedevs\.net", r"WRD"],
-        LUACC: [r"Luacc", r"luacc_obf"],
+        XHIDER: [
+            r"XHider", r"XHider", r"xhider",
+            r"This file was created by XHider",
+            r"discord\.gg/hATuHQaQRb",
+            r"XHD:",
+        ],
     }
 
     STRUCTURAL_SIGNATURES = {
@@ -3382,7 +5390,8 @@ class VMFingerprint:
         ],
         LURAPH_V11: [
             (r"local\s+\w+\s*=\s*\{(?:\s*\d+\s*,\s*){200,}\d+\s*\}", 1.5),
-            (r"for\s+\w+\s*=\s*0\s*,\s*#\w+\s*-\s*1\s*do\s*\w+\[\w+\]\s*=\s*\w+\[\w+\+1\]\s*~\s*\w+\[\w+\s*%\s*#\w+\s*\+\s*1\]", 1.5),
+            (r"for\s+\w+\s*=\s*0\s*,\s*#\w+\s*-\s*1\s*do\s*\w+\[\w+\]\s*=\s*\w+\[\w+\+1\]\s*~\s*\w+\[\w+\s*%\s*#\w+\s*\+\s*1\]",
+             1.5),
             (r"local\s+\w+\s*=\s*\{\s*(?:\d+\s*,\s*){30,}\d+\s*\}\s*local\s+\w+\s*=\s*\"[A-Za-z0-9+/]{20,}", 1.3),
             (r"bit\s*\.\s*bxor\s*\(\s*\w+\s*,\s*\w+\s*\)\s*%\s*256", 1.2),
             (r"string\.byte\s*\(\s*\w+\s*,\s*\w+\s*\)\s*[%\^]\s*\d+", 1.0),
@@ -3392,7 +5401,8 @@ class VMFingerprint:
         LURAPH_V14: [
             (r"local\s+\w+\s*=\s*\{(?:\s*\d+\s*,\s*){400,}\d+\s*\}", 1.6),
             (r"local\s+\w+\s*=\s*\{[^\}]+\}\s*local\s+\w+\s*=\s*\{[^\}]+\}\s*local\s+\w+\s*=\s*loadstring", 1.4),
-            (r"for\s+\w+\s*=\s*1\s*,\s*#\w+\s*do\s*\w+\[\w+\]\s*=\s*\w+\[\w+\]\s*~\s*\w+\[\w+\s*%\s*#\w+\s*\+\s*1\]", 1.3),
+            (r"for\s+\w+\s*=\s*1\s*,\s*#\w+\s*do\s*\w+\[\w+\]\s*=\s*\w+\[\w+\]\s*~\s*\w+\[\w+\s*%\s*#\w+\s*\+\s*1\]",
+             1.3),
             (r"local\s+\w+\s*=\s*\(\s*function\s*\([^)]{0,50}\)\s*local\s+\w+\s*=\s*\{\s*(?:\d+\s*,\s*){100,}", 1.2),
             (r"bit\s*\.\s*bxor\s*\(\s*\w+\s*,\s*\w+\s*\)\s*%\s*256", 1.0),
             (r"local\s+\w+\s*=\s*\{(?:\s*\d+\s*,\s*){300,}\}", 1.5),
@@ -3419,34 +5429,20 @@ class VMFingerprint:
             (r"local\s+\w+\s*=\s*loadstring\s*or\s*load", 1.0),
             (r"table\.concat\s*\(\s*\w+\s*,\s*[\"']\s*[\"']\s*\)", 1.1),
         ],
+        XHIDER: [
+            (r"string\.unpack\s*\(\s*[\"']<I", 1.8),
+            (r"XHD:", 2.5),
+            (r"string\.gsub\s*\([^)]*\\u\{", 1.5),
+            (r"repeat\s+local\s+\w+\s*=\s*nil\s*;\s*local\s+\w+\s*=\s*function", 1.6),
+            (r"H\[\w+\]\s*=\s*y\[\w+\]", 1.2),
+            (r"\[==\[XHD:", 2.5),
+            (r"This file was created by XHider", 3.0),
+        ],
         BYTECODE_LUA: [
             (r"\x1bLua", 2.0),
             (r"\\27Lua|\\x1bLua", 1.5),
             (r"local\s+\w+\s*=\s*\{\s*27\s*,\s*76\s*,\s*117\s*,\s*97", 1.4),
             (r"loadstring\s*\(\s*string\.char\s*\(\s*27\s*,\s*76\s*,\s*117\s*,\s*97", 1.6),
-        ],
-        AZTUPBREW: [
-            (r"local\s+\w+\s*=\s*\{(?:\s*\d+\s*,\s*){100,}\}\s*local\s+\w+\s*=\s*\{(?:\s*\d+\s*,\s*){10,}", 1.3),
-            (r"string\.char\s*\(\s*\w+\s*%\s*256", 1.0),
-        ],
-        XFUSCATOR: [
-            (r"local\s+\w+\s*=\s*\{\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+", 1.0),
-            (r"XFuscator|xfuscator", 1.5),
-        ],
-        HYPERION: [
-            (r"Hyperion|hyperion", 1.5),
-            (r"__HYPERION", 1.5),
-        ],
-        PSU: [
-            (r"PSU|psu_obf", 1.3),
-            (r"local\s+\w+\s*=\s*require\s*\(\s*\"psu", 1.2),
-        ],
-        WEAREDEVS: [
-            (r"wearedevs|WeAreDevs", 1.5),
-            (r"WRD\s*Obfuscator", 1.4),
-        ],
-        LUACC: [
-            (r"luacc|Luacc", 1.3),
         ],
     }
 
@@ -4134,7 +6130,8 @@ class LuraphV11Decoder:
         if ratio > 0.88:
             try:
                 text = decoded.decode("utf-8")
-                if any(kw in text for kw in ("local ", "function", "return", "if ", "end", "then", "print", "for ", "while")):
+                if any(kw in text for kw in (
+                        "local ", "function", "return", "if ", "end", "then", "print", "for ", "while")):
                     return text
             except Exception:
                 pass
@@ -4377,7 +6374,8 @@ class LuraphV13Decoder:
             except Exception:
                 pass
             try:
-                xtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in range(0, min(16, len(key_bytes)) - 3, 4)]
+                xtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in
+                            range(0, min(16, len(key_bytes)) - 3, 4)]
                 if len(xtea_key) == 4:
                     xtea_dec = XTEA.decrypt(bytes(payload), xtea_key)
                     lifted = LuraphV13Decoder._validate(xtea_dec)
@@ -4386,7 +6384,8 @@ class LuraphV13Decoder:
             except Exception:
                 pass
             try:
-                tea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in range(0, min(16, len(key_bytes)) - 3, 4)]
+                tea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in
+                           range(0, min(16, len(key_bytes)) - 3, 4)]
                 if len(tea_key) == 4:
                     tea_dec = TEA.decrypt(bytes(payload), tea_key)
                     lifted = LuraphV13Decoder._validate(tea_dec)
@@ -4395,7 +6394,8 @@ class LuraphV13Decoder:
             except Exception:
                 pass
             try:
-                xxtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in range(0, min(16, len(key_bytes)) - 3, 4)]
+                xxtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in
+                             range(0, min(16, len(key_bytes)) - 3, 4)]
                 if len(xxtea_key) == 4:
                     xxtea_dec = XXTEA.decrypt(bytes(payload), xxtea_key)
                     lifted = LuraphV13Decoder._validate(xxtea_dec)
@@ -4601,7 +6601,8 @@ class LuraphV14Decoder:
             except Exception:
                 pass
             try:
-                xtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in range(0, min(16, len(key_bytes)) - 3, 4)]
+                xtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in
+                            range(0, min(16, len(key_bytes)) - 3, 4)]
                 if len(xtea_key) == 4:
                     xtea_dec = XTEA.decrypt(bytes(payload), xtea_key)
                     lifted = LuraphV14Decoder._validate(xtea_dec)
@@ -4610,7 +6611,8 @@ class LuraphV14Decoder:
             except Exception:
                 pass
             try:
-                xxtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in range(0, min(16, len(key_bytes)) - 3, 4)]
+                xxtea_key = [int.from_bytes(key_bytes[i:i + 4], "little") for i in
+                             range(0, min(16, len(key_bytes)) - 3, 4)]
                 if len(xxtea_key) == 4:
                     xxtea_dec = XXTEA.decrypt(bytes(payload), xxtea_key)
                     lifted = LuraphV14Decoder._validate(xxtea_dec)
@@ -5278,6 +7280,7 @@ class LuaObfuscatorDecoder:
                 except Exception:
                     pass
             return m.group(0)
+
         return re.sub(
             r"string\.char\(\s*((?:\d+\s*,\s*)+\d+)\s*\)",
             replacer,
@@ -5293,12 +7296,13 @@ class LuaObfuscatorDecoder:
                     dec = base64.b64decode(inner + "=" * (-len(inner) % 4))
                     text = dec.decode("utf-8", errors="replace")
                     if all(32 <= ord(c) < 127 or c in "\n\r\t" for c in text) and \
-                       any(kw in text for kw in ("local ", "function", "return", "end")):
+                            any(kw in text for kw in ("local ", "function", "return", "end")):
                         return text
                     inner = text
                 except Exception:
                     break
             return m.group(0)
+
         source = re.sub(
             r'loadstring\s*\(\s*["\']([A-Za-z0-9+/=]{20,})["\']\s*\)',
             ls_replacer,
@@ -5324,6 +7328,7 @@ class LuaObfuscatorDecoder:
                     pass
                 return '"' + full + '"'
             return m.group(0)
+
         source = re.sub(
             r'table\.concat\s*\(\s*\{([^}]+)\}\s*,\s*["\']["\']?\s*\)',
             concat_replacer,
@@ -5338,6 +7343,7 @@ class LuaObfuscatorDecoder:
                 return str(int(m.group(0), 16))
             except Exception:
                 return m.group(0)
+
         return re.sub(r"\b0x[0-9a-fA-F]+\b", hex_to_dec, source)
 
     @staticmethod
@@ -5350,6 +7356,7 @@ class LuaObfuscatorDecoder:
             mapping = dict(replacements)
             result = "".join(mapping.get(ch, ch) for ch in inner)
             return '"' + result + '"'
+
         return re.sub(
             r'string\.gsub\s*\(\s*"([^"]+)"\s*,\s*\{([^}]+)\}',
             gsub_repl,
@@ -5384,6 +7391,7 @@ class BoronideDecoder:
                 except Exception:
                     pass
             return m.group(0)
+
         return re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)+\d+)\s*\)", repl, source)
 
     @staticmethod
@@ -5404,7 +7412,9 @@ class BoronideDecoder:
                         return str(o(a, b))
                     except Exception:
                         return m.group(0)
+
                 return repl
+
             source = re.sub(
                 rf"bit32\.{name}\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
                 make_replacer(op),
@@ -5417,6 +7427,7 @@ class BoronideDecoder:
                 return str((~a) & 0xFFFFFFFF)
             except Exception:
                 return m.group(0)
+
         source = re.sub(r"bit32\.bnot\(\s*(0x[0-9a-fA-F]+|\d+)\s*\)", bnot_repl, source)
 
         def arshift_repl(m):
@@ -5428,6 +7439,7 @@ class BoronideDecoder:
                 return str((a >> b) & 0xFFFFFFFF)
             except Exception:
                 return m.group(0)
+
         source = re.sub(
             r"bit32\.arshift\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
             arshift_repl, source,
@@ -5440,6 +7452,7 @@ class BoronideDecoder:
                 return str(((a << b) | (a >> (32 - b))) & 0xFFFFFFFF if b else a)
             except Exception:
                 return m.group(0)
+
         source = re.sub(
             r"bit32\.lrotate\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
             lrotate_repl, source,
@@ -5452,6 +7465,7 @@ class BoronideDecoder:
                 return str(((a >> b) | (a << (32 - b))) & 0xFFFFFFFF if b else a)
             except Exception:
                 return m.group(0)
+
         source = re.sub(
             r"bit32\.rrotate\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
             rrotate_repl, source,
@@ -5482,6 +7496,7 @@ class BoronideDecoder:
                 except Exception:
                     pass
             return m.group(0)
+
         source = re.sub(
             r"\{\s*((?:0x[0-9a-fA-F]+|\d+)(?:\s*,\s*(?:0x[0-9a-fA-F]+|\d+)){10,})\s*\}",
             array_decode,
@@ -5496,6 +7511,7 @@ class BoronideDecoder:
                 return str(int(m.group(0), 16))
             except Exception:
                 return m.group(0)
+
         return re.sub(r"\b0x[0-9a-fA-F]+\b", hex_to_dec, source)
 
     @staticmethod
@@ -5512,77 +7528,213 @@ class BoronideDecoder:
                 else:
                     result.append(c)
             return '"' + "".join(result) + '"'
+
         return re.sub(r'string\.rot\s*\(\s*"([^"]+)"\s*,\s*(\d+)\s*\)', rot_repl, source)
 
 
-class AztupBrewDecoder:
+class XhiderDecoder:
     @staticmethod
     def detect(source: str) -> bool:
-        return bool(re.search(r"AztupBrew|aztupbrew|Aztup", source, re.IGNORECASE))
+        return bool(re.search(
+            r"XHider|XHider|This file was created by XHider|discord\.gg/hATuHQaQRb|XHD:",
+            source, re.IGNORECASE
+        ))
 
     @staticmethod
     def decode(source: str) -> str:
-        result = IronBrew2Decoder.decode(source)
-        return result
+        source = XhiderDecoder.strip_header(source)
+        source = XhiderDecoder.fold_arithmetic(source)
+        source = XhiderDecoder.fold_double_neg(source)
+        source = XhiderDecoder.remove_junk_repeats(source)
+        source = XhiderDecoder.remove_nil_stubs(source)
+        source = XhiderDecoder.simplify_const_tables(source)
+        source = XhiderDecoder.decode_xhd_payload(source)
+        source = XhiderDecoder.fold_string_unpack_calls(source)
+        return source
 
-
-class XFuscatorDecoder:
     @staticmethod
-    def detect(source: str) -> bool:
-        return bool(re.search(r"XFuscator|xfuscator", source, re.IGNORECASE))
-
-    @staticmethod
-    def decode(source: str) -> str:
+    def strip_header(source: str) -> str:
         source = re.sub(
-            r"local\s+\w+\s*=\s*\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)",
-            lambda m: "local _ = {" + ", ".join(str(int(m.group(i)) ^ 0x5A) for i in range(1, 5)),
-            source,
+            r"^--//\s*This file was created by XHider[^\n]*\n+",
+            "", source, flags=re.MULTILINE | re.IGNORECASE
         )
         return source
 
-
-class HyperionDecoder:
     @staticmethod
-    def detect(source: str) -> bool:
-        return bool(re.search(r"Hyperion|hyperion", source, re.IGNORECASE))
+    def _eval_arith(expr: str) -> Optional[int]:
+        expr = expr.strip()
+        expr = re.sub(r"\s+", "", expr)
+        expr = expr.replace("+-", "-").replace("--", "+").replace("-+", "-").replace("++", "+")
+        try:
+            if re.fullmatch(r"-?\d+(?:[+\-*/%]\-?\d+)*", expr):
+                return int(eval(expr, {"__builtins__": {}}, {}))
+        except Exception:
+            pass
+        m = re.fullmatch(r"\((-?\d+)\)", expr)
+        if m:
+            return int(m.group(1))
+        return None
 
     @staticmethod
-    def decode(source: str) -> str:
-        pool = MoonSecV3Decoder.extract_string_pool(source)
-        if pool:
-            decoded = MoonSecV3Decoder.decode_string_pool(pool)
-            if decoded:
-                return decoded
+    def fold_arithmetic(source: str) -> str:
+        prev = None
+        rounds = 0
+        while prev != source and rounds < 15:
+            prev = source
+
+            def paren_repl(m):
+                val = XhiderDecoder._eval_arith(m.group(1))
+                if val is not None:
+                    return str(val)
+                return m.group(0)
+
+            source = re.sub(
+                r"\((-?\d+(?:\s*[+\-]\s*-?\d+){1,8})\)",
+                paren_repl, source
+            )
+
+            def bare_repl(m):
+                val = XhiderDecoder._eval_arith(m.group(0))
+                if val is not None and abs(val) < 2 ** 31:
+                    return str(val)
+                return m.group(0)
+
+            source = re.sub(
+                r"(?<![\w.])-?\d+\s*[+\-]\s*-?\d+(?:\s*[+\-]\s*-?\d+){0,6}(?![\w.])",
+                bare_repl, source
+            )
+
+            source = re.sub(r"\b(\d+)\s*\+\s*-\s*(\d+)\b", lambda m: str(int(m.group(1)) - int(m.group(2))),
+                            source)
+            source = re.sub(r"\b(\d+)\s*-\s*-\s*(\d+)\b", lambda m: str(int(m.group(1)) + int(m.group(2))),
+                            source)
+            source = re.sub(r"\b(\d+)\s*-\s*\(\s*-(\d+)\s*\)", lambda m: str(int(m.group(1)) + int(m.group(2))),
+                            source)
+            source = re.sub(r"-\s*\(\s*-(\d+)\s*\)", r"\1", source)
+            rounds += 1
         return source
 
-
-class PSUDecoder:
     @staticmethod
-    def detect(source: str) -> bool:
-        return bool(re.search(r"PSU|psu_obf", source, re.IGNORECASE))
-
-    @staticmethod
-    def decode(source: str) -> str:
-        pool = MoonSecV3Decoder.extract_string_pool(source)
-        if pool:
-            decoded = MoonSecV3Decoder.decode_string_pool(pool)
-            if decoded:
-                return decoded
+    def fold_double_neg(source: str) -> str:
+        source = re.sub(r"-\s*\(\s*-(\d+)\s*\)", r"\1", source)
+        source = re.sub(r"not\s+not\s+", "", source)
         return source
 
-
-class WeAreDevsDecoder:
     @staticmethod
-    def detect(source: str) -> bool:
-        return bool(re.search(r"wearedevs|WeAreDevs|WRD", source, re.IGNORECASE))
+    def remove_junk_repeats(source: str) -> str:
+        source = re.sub(
+            r"repeat\s+local\s+\w+\s*=\s*nil\s*;\s*local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;\s*local\s+\w+\s*=\s*nil\s*;",
+            "repeat ", source
+        )
+        source = re.sub(
+            r"local\s+\w+\s*=\s*nil\s*;\s*local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;\s*local\s+\w+\s*=\s*nil\s*;",
+            "", source
+        )
+        source = re.sub(
+            r"local\s+\w+\s*=\s*function\s*\([^)]*\)\s*end\s*;",
+            "", source
+        )
+        source = re.sub(
+            r"if\s+not\s*\(\s*\w+\s*[~=><]+\s*-?\d+\s*\)\s*then\s*do\s+do\s+",
+            "do do ", source
+        )
+        return source
 
     @staticmethod
-    def decode(source: str) -> str:
-        pool = MoonSecV3Decoder.extract_string_pool(source)
-        if pool:
-            decoded = MoonSecV3Decoder.decode_string_pool(pool)
-            if decoded:
-                return decoded
+    def remove_nil_stubs(source: str) -> str:
+        source = re.sub(r"local\s+\w+\s*=\s*nil\s*;?", "", source)
+        source = re.sub(r"local\s+\w+\s*=\s*function\s*\(\s*\)\s*end\s*;?", "", source)
+        source = re.sub(r"local\s+\w+\s*=\s*function\s*\(\w+\)\s*end\s*;?", "", source)
+        return source
+
+    @staticmethod
+    def simplify_const_tables(source: str) -> str:
+        def table_repl(m):
+            body = m.group(1)
+            nums = re.findall(r"-?\d+(?:\s*[+\-*/]\s*-?\d+)*", body)
+            resolved = []
+            for n in nums:
+                v = XhiderDecoder._eval_arith(n)
+                if v is not None:
+                    resolved.append(str(v))
+                else:
+                    resolved.append(n)
+            if resolved and all(re.fullmatch(r"-?\d+", x) for x in resolved):
+                try:
+                    chars = "".join(chr(int(x) & 0xFF) for x in resolved if 0 <= int(x) <= 255)
+                    if len(chars) >= 2 and all(32 <= ord(c) < 127 or c in "\n\r\t" for c in chars):
+                        esc = chars.replace("\\", "\\\\").replace('"', '\\"')
+                        return '"' + esc + '"'
+                except Exception:
+                    pass
+            return m.group(0)
+
+        source = re.sub(
+            r"\{\s*((?:-?\d+(?:\s*[+\-*/]\s*-?\d+)*\s*[;,]\s*){2,}-?\d+(?:\s*[+\-*/]\s*-?\d+)*)\s*\}",
+            table_repl, source
+        )
+        return source
+
+    @staticmethod
+    def decode_xhd_payload(source: str) -> str:
+        m = re.search(r"Y\(\s*\[==\[(XHD:[^\]]*)\]==\]\s*\)", source, re.DOTALL)
+        if not m:
+            m = re.search(r"\[==\[(XHD:[^\]]*)\]==\]", source, re.DOTALL)
+        if not m:
+            return source
+        payload = m.group(1)
+        try:
+            decoded = XhiderDecoder._decode_xhd_string(payload)
+            if decoded and len(decoded) > 10:
+                return source[:m.start()] + f'"{decoded[:80]}..."' + source[m.end():]
+        except Exception:
+            pass
+        return source
+
+    @staticmethod
+    def _decode_xhd_string(raw: str) -> Optional[str]:
+        if not raw.startswith("XHD:"):
+            return None
+        data = raw[4:]
+        data = data.replace("z", "!!!!!")
+        data = re.sub(r"[\s\r\n]", "", data)
+        out = []
+        i = 0
+        n = len(data)
+        while i < n:
+            chunk = data[i:i + 5]
+            if len(chunk) < 1:
+                break
+            val = 0
+            for c in chunk:
+                val = val * 85 + (ord(c) - 33)
+            for _ in range(5 - len(chunk)):
+                val = val * 85 + 84
+            b0 = (val >> 24) & 0xFF
+            b1 = (val >> 16) & 0xFF
+            b2 = (val >> 8) & 0xFF
+            b3 = val & 0xFF
+            if len(chunk) == 5:
+                out.extend([b0, b1, b2, b3])
+            elif len(chunk) >= 4:
+                out.extend([b0, b1, b2])
+            elif len(chunk) >= 3:
+                out.extend([b0, b1])
+            elif len(chunk) >= 2:
+                out.append(b0)
+            i += 5
+        try:
+            return bytes(out).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    @staticmethod
+    def fold_string_unpack_calls(source: str) -> str:
+        source = re.sub(
+            r'string\.unpack\s*\(\s*["\']<I\\x?3[124]?["\']\s*,',
+            'string.unpack("<I4",',
+            source
+        )
         return source
 
 
@@ -5696,6 +7848,7 @@ class StringDecoder:
                 return '"' + inner[::-1] + '"'
             except Exception:
                 return m.group(0)
+
         source = re.sub(
             r'string\.reverse\s*\(\s*"([^"]+)"\s*\)',
             reverse_replacer,
@@ -5730,7 +7883,9 @@ class StringDecoder:
                         return str(o(a, b))
                     except Exception:
                         return m.group(0)
+
                 return repl
+
             source = re.sub(
                 rf"bit\.{name}\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
                 make_replacer(op),
@@ -5743,6 +7898,7 @@ class StringDecoder:
                 return str((~a) & 0xFFFFFFFF)
             except Exception:
                 return m.group(0)
+
         source = re.sub(r"bit\.bnot\(\s*(0x[0-9a-fA-F]+|\d+)\s*\)", bnot_repl, source)
 
         def arshift_repl(m):
@@ -5754,6 +7910,7 @@ class StringDecoder:
                 return str((a >> b) & 0xFFFFFFFF)
             except Exception:
                 return m.group(0)
+
         source = re.sub(
             r"bit\.arshift\(\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)",
             arshift_repl, source,
@@ -5779,6 +7936,7 @@ class StringDecoder:
             if s != original:
                 return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
             return m.group(0)
+
         source = re.sub(r'"([A-Za-z0-9+/]{20,}={0,2})"', multi_b64, source)
         return source
 
@@ -5801,6 +7959,7 @@ class StringDecoder:
             except Exception:
                 pass
             return m.group(0)
+
         source = re.sub(
             r'(?:zlib\.decompress|inflate)\s*\(\s*(?:base64\.decode\s*\(\s*)?["\']([A-Za-z0-9+/=]+)["\']',
             zlib_replacer,
@@ -5820,6 +7979,7 @@ class StringDecoder:
             except Exception:
                 pass
             return m.group(0)
+
         return re.sub(r'"((?:\\x[0-9a-fA-F]{2}){4,})"', hx, source)
 
     @staticmethod
@@ -5842,6 +8002,7 @@ class StringDecoder:
                 except Exception:
                     pass
             return m.group(0)
+
         source = re.sub(
             r"\{\s*((?:0x[0-9a-fA-F]+|\d+)(?:\s*,\s*(?:0x[0-9a-fA-F]+|\d+)){2,})\s*\}",
             arr_repl,
@@ -5856,6 +8017,7 @@ class StringDecoder:
                 return str(int(m.group(0), 16))
             except Exception:
                 return m.group(0)
+
         return re.sub(r"\b0x[0-9a-fA-F]+\b", hex_to_dec, source)
 
     @staticmethod
@@ -5875,6 +8037,7 @@ class StringDecoder:
                 if any(kw in candidate for kw in COMMON_STRINGS):
                     return '"' + candidate + '"'
             return m.group(0)
+
         return re.sub(r'"([a-zA-Z]{5,})"', caesar_repl, source)
 
     @staticmethod
@@ -5897,6 +8060,7 @@ class StringDecoder:
             except Exception:
                 pass
             return m.group(0)
+
         return re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)+\d+)\s*\)", xor_repl, source)
 
     @staticmethod
@@ -5924,6 +8088,7 @@ class StringDecoder:
             if any(kw in reversed_inner for kw in COMMON_STRINGS):
                 return '"' + reversed_inner + '"'
             return m.group(0)
+
         return re.sub(r'"([a-zA-Z0-9_\.\:\s]{5,})"', rev_repl, source)
 
     @staticmethod
@@ -5936,6 +8101,7 @@ class StringDecoder:
                 if all(32 <= ord(c) < 127 or c in "\n\r\t" for c in result):
                     return '"' + result.replace("\\", "\\\\").replace('"', '\\"') + '"'
             return inner
+
         return re.sub(
             r"(?:string\.char\(\d+\)\s*\.\.\s*)+string\.char\(\d+\)",
             chain_repl,
@@ -5949,6 +8115,7 @@ class StringDecoder:
             if parts:
                 return '"' + "".join(parts) + '"'
             return m.group(0)
+
         return re.sub(r'(?:\["[^"]+"\]\s*\.\.\s*)*\["[^"]+"\]', repl, source)
 
     @staticmethod
@@ -5964,6 +8131,7 @@ class StringDecoder:
             except Exception:
                 pass
             return m.group(0)
+
         return re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)+\d+)\s*\)", repl, source)
 
 
@@ -5999,8 +8167,8 @@ class BytecodeExtractor:
         best = None
         best_len = 0
         for m in re.finditer(
-            r"string\.char\(((?:\s*\d+\s*,\s*)*\d+)\)",
-            source, re.DOTALL,
+                r"string\.char\(((?:\s*\d+\s*,\s*)*\d+)\)",
+                source, re.DOTALL,
         ):
             nums = [int(x.strip()) for x in m.group(1).split(",")]
             if len(nums) > best_len and all(0 <= n <= 255 for n in nums):
@@ -6412,7 +8580,8 @@ class OpcodeMapper:
             if op_num is not None:
                 return (op_num, lua_op_map[best_sem], best_sem)
 
-        if re.search(r"PC\s*=|IP\s*=|pc\s*=|ip\s*=", text) and re.search(r"offset|jump|jmp|sBx", text, re.IGNORECASE):
+        if re.search(r"PC\s*=|IP\s*=|pc\s*=|ip\s*=", text) and re.search(r"offset|jump|jmp|sBx", text,
+                                                                            re.IGNORECASE):
             op_num = self._extract_case_number(branch)
             if op_num is not None:
                 return (op_num, int(LuaOpcode.OP_JMP), VMOpcodeSemantics.JMP)
@@ -6470,6 +8639,8 @@ class ControlFlowSimplifier:
         src = self._remove_unreachable_code(src)
         src = self._remove_empty_blocks(src)
         src = self._remove_redundant_blocks(src)
+        src = upgrade_control_flow_simplifier(src)
+        self.source = src
         return src
 
     def _remove_never_true_ifs(self, src: str) -> str:
@@ -6510,7 +8681,7 @@ class ControlFlowSimplifier:
         return src
 
     def _remove_unused_locals(self, src: str) -> str:
-        for _ in range(3):
+        for _ in range(4):
             decls = list(re.finditer(r"local\s+(\w+)\s*=\s*([^\n;]+)", src))
             for m in decls:
                 name = m.group(1)
@@ -6521,7 +8692,7 @@ class ControlFlowSimplifier:
         return src
 
     def _remove_dead_assignments(self, src: str) -> str:
-        for _ in range(2):
+        for _ in range(3):
             assigns = list(re.finditer(r"^\s*(\w+)\s*=\s*([^\n;]+)$", src, re.MULTILINE))
             for m in assigns:
                 name = m.group(1)
@@ -6553,7 +8724,7 @@ class ControlFlowSimplifier:
         src = self.source
         prev = None
         rounds = 0
-        while prev != src and rounds < 12:
+        while prev != src and rounds < 15:
             prev = src
             src = re.sub(r"\b(\d+)\s*([\+\-\*\/\%])\s*(\d+)\b",
                          lambda m: self._safe_eval(m), src)
@@ -6599,11 +8770,13 @@ class ControlFlowSimplifier:
 
     def collapse_string_concat(self) -> str:
         src = self.source
+
         def concat_replacer(m):
             parts = re.findall(r'"([^"]*)"', m.group(0))
             if len(parts) >= 2:
                 return '"' + "".join(parts) + '"'
             return m.group(0)
+
         src = re.sub(r'"[^"]*"\s*\.\.\s*(?:"[^"]*"\s*\.\.\s*)*"[^"]*"', concat_replacer, src)
         src = re.sub(r"'[^']*'\s*\.\.\s*(?:'[^']*'\s*\.\.\s*)*'[^']*'", concat_replacer, src)
         return src
@@ -6624,14 +8797,16 @@ class ControlFlowSimplifier:
         def repl(m):
             try:
                 nums = [int(x.strip()) for x in m.group(1).split(",")]
-                return '"' + "".join(chr(n) for n in nums if 0 <= n <= 0x10FFFF).replace("\\", "\\\\").replace('"', '\\"') + '"'
+                return '"' + "".join(chr(n) for n in nums if 0 <= n <= 0x10FFFF).replace("\\", "\\\\").replace('"',
+                                                                                                               '\\"') + '"'
             except Exception:
                 return m.group(0)
+
         return re.sub(r"string\.char\(\s*((?:\d+\s*,\s*)*\d+)\s*\)", repl, self.source)
 
     def propagate_constants(self) -> str:
         src = self.source
-        for _ in range(5):
+        for _ in range(6):
             const_decls: Dict[str, str] = {}
             for m in re.finditer(r"local\s+(\w+)\s*=\s*(-?\d+(?:\.\d+)?|true|false|nil)\b", src):
                 const_decls[m.group(1)] = m.group(2)
@@ -6685,7 +8860,7 @@ class ControlFlowSimplifier:
         def ls_repl(m):
             try:
                 inner = m.group(1)
-                for _ in range(5):
+                for _ in range(6):
                     try:
                         dec = base64.b64decode(inner + "=" * (-len(inner) % 4))
                         text = dec.decode("utf-8", errors="replace")
@@ -6697,6 +8872,7 @@ class ControlFlowSimplifier:
                 return m.group(0)
             except Exception:
                 return m.group(0)
+
         return re.sub(r'loadstring\s*\(\s*"([A-Za-z0-9+/=]{20,})"\s*\)', ls_repl, self.source)
 
     def unflatten_state_machine(self) -> str:
@@ -6709,7 +8885,8 @@ class AntiTamperBypass:
         self.source = source
 
     def strip_integrity_checks(self) -> str:
-        src = self.source
+        src = upgrade_anti_tamper_bypass(self.source)
+        self.source = src
 
         src = re.sub(
             r"if\s+tostring\s*\(\s*\w+\s*\)\s*~=\s*[\"'].*?[\"']\s*then\s*(?:error|os\.exit|return)\s*.*?end",
@@ -6917,27 +9094,7 @@ class VariableRenamer:
         return None
 
     def rename(self) -> str:
-        tokens = re.findall(r"\b([a-zA-Z_]\w*)\b", self.source)
-        unique_names = set(tokens)
-        result = self.source
-        for name in unique_names:
-            if name in LUA_KEYWORDS or name in LUA_BUILTINS:
-                continue
-            if not self.is_obfuscated(name):
-                continue
-            if name in self.name_map:
-                continue
-            role = self.guess_role(name)
-            if role:
-                self._counter[role] += 1
-                new_name = f"{role}_{self._counter[role]}"
-            else:
-                self._counter["var"] += 1
-                new_name = f"var_{self._counter['var']}"
-            self.name_map[name] = new_name
-
-        for old, new in sorted(self.name_map.items(), key=lambda x: -len(x[0])):
-            result = re.sub(r"\b" + re.escape(old) + r"\b", new, result)
+        result, self.name_map = upgrade_variable_renamer(self.source, self.name_map)
         return result
 
 
@@ -7096,16 +9253,16 @@ class LuaCodegen:
                     rets = [self._reg(A + r) for r in range(num_rets)]
                     self._write(f"return {', '.join(rets)}")
             elif op == LuaOpcode.OP_FORLOOP:
-                self._write(f"{self._reg(A)} = {self._reg(A)} + {self._reg(A+2)}")
-                self._write(f"if {self._reg(A)} <= {self._reg(A+1)} then goto label_{i + 1 + sBx} end")
+                self._write(f"{self._reg(A)} = {self._reg(A)} + {self._reg(A + 2)}")
+                self._write(f"if {self._reg(A)} <= {self._reg(A + 1)} then goto label_{i + 1 + sBx} end")
             elif op == LuaOpcode.OP_FORPREP:
-                self._write(f"{self._reg(A)} = {self._reg(A)} - {self._reg(A+2)}")
+                self._write(f"{self._reg(A)} = {self._reg(A)} - {self._reg(A + 2)}")
                 self._write(f"goto label_{i + 1 + sBx}")
             elif op == LuaOpcode.OP_TFORLOOP:
-                self._write(f"{self._reg(A+2)} = {self._reg(A+3)}")
-                self._write(f"if {self._reg(A+3)} ~= nil then goto label_{i + 1 + sBx} end")
+                self._write(f"{self._reg(A + 2)} = {self._reg(A + 3)}")
+                self._write(f"if {self._reg(A + 3)} ~= nil then goto label_{i + 1 + sBx} end")
             elif op == LuaOpcode.OP_SETLIST:
-                self._write(f"for _i = 1, {B} do {self._reg(A)}[_i] = {self._reg(A+_i)} end")
+                self._write(f"for _i = 1, {B} do {self._reg(A)}[_i] = {self._reg(A + _i)} end")
             elif op == LuaOpcode.OP_CLOSE:
                 self._write(f"local _close_{A} = {self._reg(A)}")
             elif op == LuaOpcode.OP_CLOSURE:
@@ -7134,7 +9291,8 @@ class LuaCodegen:
         self._write("end")
         self._write("")
         self._write(f"return fn_{abs(hash(self.proto.source)) % 10000}")
-        return "\n".join(self.output)
+        raw = "\n".join(self.output)
+        return upgrade_lua_codegen_postprocess(raw)
 
 
 class LuaBytecodeParser:
@@ -7320,6 +9478,10 @@ class Beautifier:
         self.indent_size = 2
 
     def beautify(self) -> str:
+        upgraded = upgrade_beautifier(self.source)
+        if upgraded and len(upgraded.strip()) > 0:
+            self.source = upgraded
+            return upgraded
         lines = self.source.split("\n")
         result = []
         indent = 0
@@ -7423,11 +9585,11 @@ class Beautifier:
 
 class VMSemanticInterpreter:
     def __init__(
-        self,
-        source: str,
-        splitter: VMSplitter,
-        extractor: Optional[VMExtractor] = None,
-        bytecode: Optional[List[int]] = None,
+            self,
+            source: str,
+            splitter: VMSplitter,
+            extractor: Optional[VMExtractor] = None,
+            bytecode: Optional[List[int]] = None,
     ):
         self.source = source
         self.splitter = splitter
@@ -7509,12 +9671,18 @@ class VMSemanticInterpreter:
         layouts: List[Dict[str, Any]] = [base]
 
         standard_variants = [
-            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "c_shift": 14, "c_width": 9, "b_shift": 23, "b_width": 9},
-            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "b_shift": 14, "b_width": 9, "c_shift": 23, "c_width": 9},
-            {"opcode_width": 5, "opcode_shift": 0, "a_shift": 5, "a_width": 8, "b_shift": 13, "b_width": 9, "c_shift": 22, "c_width": 9},
-            {"opcode_width": 8, "opcode_shift": 0, "a_shift": 8, "a_width": 8, "b_shift": 16, "b_width": 8, "c_shift": 24, "c_width": 8},
-            {"opcode_width": 7, "opcode_shift": 0, "a_shift": 7, "a_width": 8, "b_shift": 15, "b_width": 8, "c_shift": 23, "c_width": 8},
-            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "b_shift": 14, "b_width": 8, "c_shift": 22, "c_width": 8},
+            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "c_shift": 14, "c_width": 9,
+             "b_shift": 23, "b_width": 9},
+            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "b_shift": 14, "b_width": 9,
+             "c_shift": 23, "c_width": 9},
+            {"opcode_width": 5, "opcode_shift": 0, "a_shift": 5, "a_width": 8, "b_shift": 13, "b_width": 9,
+             "c_shift": 22, "c_width": 9},
+            {"opcode_width": 8, "opcode_shift": 0, "a_shift": 8, "a_width": 8, "b_shift": 16, "b_width": 8,
+             "c_shift": 24, "c_width": 8},
+            {"opcode_width": 7, "opcode_shift": 0, "a_shift": 7, "a_width": 8, "b_shift": 15, "b_width": 8,
+             "c_shift": 23, "c_width": 8},
+            {"opcode_width": 6, "opcode_shift": 0, "a_shift": 6, "a_width": 8, "b_shift": 14, "b_width": 8,
+             "c_shift": 22, "c_width": 8},
         ]
         for variant in standard_variants:
             merged = dict(base)
@@ -7790,6 +9958,15 @@ class DeobfuscationPipeline:
                 beautified = Beautifier(lifted).beautify()
                 return beautified
 
+            brute_result = upgrade_decoder_brute_force(decoded_bytecode, self.vm_type)
+            if brute_result:
+                self.log(f"         Upgrade brute-force: decoded {len(brute_result)} bytes")
+                lua_bin = self._try_parse_lua_binary(brute_result)
+                if lua_bin:
+                    lifted = LuaCodegen(lua_bin).generate()
+                    beautified = Beautifier(lifted).beautify()
+                    return beautified
+
             brute = BytecodeExtractor.try_brute_xor_keys(decoded_bytecode)
             if brute:
                 xor_key, raw_lua = brute
@@ -7846,7 +10023,8 @@ class DeobfuscationPipeline:
                 self.report["vm_lifted"] = True
                 self.report["vm_lift_confidence"] = interpreter.confidence
                 self.report["vm_lift_lines"] = len(lifted_vm.splitlines())
-                self.log(f"         VM lifted: {self.report['vm_lift_lines']} lines, confidence={interpreter.confidence:.2f}")
+                self.log(
+                    f"         VM lifted: {self.report['vm_lift_lines']} lines, confidence={interpreter.confidence:.2f}")
                 lifted_vm = self._post_lift_refine(lifted_vm)
                 beautified_vm = Beautifier(lifted_vm).beautify()
                 return beautified_vm
@@ -7898,9 +10076,19 @@ class DeobfuscationPipeline:
         self.source = self._final_cleanup(self.source)
         self.log("         Done")
 
+        self.log("Step 19: Deep control-flow refinement...")
+        self.source = upgrade_control_flow_simplifier(self.source)
+        self.source = _upgrade_junk_code_eliminator(self.source)
+        beautifier2 = Beautifier(self.source)
+        self.source = upgrade_beautifier(beautifier2.source)
+        self.source = self._final_cleanup(self.source)
+        self.log("         Done")
+
         return self.source
 
     def _post_lift_refine(self, code: str) -> str:
+        vm = getattr(self, 'vm_type', '') or ''
+        code = upgrade_pipeline_post_lift(code, str(vm))
         code = re.sub(r"\bR(\d+)\b", r"reg_\1", code)
         code = re.sub(r"\b_\s*=\s*_", "", code)
         code = re.sub(r"^[ \t]*$\n", "", code, flags=re.MULTILINE)
@@ -8074,20 +10262,13 @@ class DeobfuscationPipeline:
         if vm == VMFingerprint.BORONIDE or VMFingerprint.BORONIDE in all_detected:
             src = BoronideDecoder.decode(src)
 
-        if vm == VMFingerprint.AZTUPBREW or VMFingerprint.AZTUPBREW in all_detected:
-            src = AztupBrewDecoder.decode(src)
-
-        if vm == VMFingerprint.XFUSCATOR or VMFingerprint.XFUSCATOR in all_detected:
-            src = XFuscatorDecoder.decode(src)
-
-        if vm == VMFingerprint.HYPERION or VMFingerprint.HYPERION in all_detected:
-            src = HyperionDecoder.decode(src)
-
-        if vm == VMFingerprint.PSU or VMFingerprint.PSU in all_detected:
-            src = PSUDecoder.decode(src)
-
-        if vm == VMFingerprint.WEAREDEVS or VMFingerprint.WEAREDEVS in all_detected:
-            src = WeAreDevsDecoder.decode(src)
+        if vm == VMFingerprint.XHIDER or VMFingerprint.XHIDER in all_detected:
+            self.log("         Trying Xhider decoder...")
+            dec = XhiderDecoder.decode(src)
+            if dec != src:
+                self.report["vm_specific_decoded"] = True
+                self.report["sub_decoders_used"].append("xhider")
+                src = dec
 
         src = StringDecoder.decode_string_reversal(src)
         src = StringDecoder.decode_boronide_bit32(src)
@@ -8136,10 +10317,10 @@ class DeobfuscationPipeline:
                 return result
 
         for extractor in (
-            BytecodeExtractor.extract_numeric_array,
-            BytecodeExtractor.extract_hex_array,
-            BytecodeExtractor.extract_string_char_array,
-            BytecodeExtractor.extract_escaped_string_bytes,
+                BytecodeExtractor.extract_numeric_array,
+                BytecodeExtractor.extract_hex_array,
+                BytecodeExtractor.extract_string_char_array,
+                BytecodeExtractor.extract_escaped_string_bytes,
         ):
             result = extractor(self.source)
             if result:
@@ -8195,6 +10376,7 @@ class DeobfuscationPipeline:
         result = StringDecoder.decode_caesar_strings(result)
         result = StringDecoder.decode_reverse_strings(result)
         result = StringDecoder.decode_string_char_reverse(result)
+        result = upgrade_string_decoder_pipeline(result)
 
         self.report["strings_decoded"] = count
         return result
@@ -8224,12 +10406,41 @@ class DeobfuscationPipeline:
         src = re.sub(r" {4,}", "  ", src)
         src = re.sub(r"\n +\n", "\n\n", src)
         src = re.sub(r"^\s*\n", "", src, flags=re.MULTILINE)
+        src = re.sub(r";\s*\n", "\n", src)
+        src = re.sub(r"(\w)\s*=\s*", r"\1 = ", src)
+        src = re.sub(r"\s*,\s*", ", ", src)
+        src = re.sub(r"\s*\+\s*", " + ", src)
+        src = re.sub(r"\s*-\s*", " - ", src)
+        src = re.sub(r"\s*\*\s*", " * ", src)
+        src = re.sub(r"\s*/\s*", " / ", src)
+        src = re.sub(r"\s*%\s*", " % ", src)
+        src = re.sub(r"\s*\^\s*", " ^ ", src)
+        src = re.sub(r"\s*\.\.\s*", " .. ", src)
+        src = re.sub(r"\s*==\s*", " == ", src)
+        src = re.sub(r"\s*~=\s*", " ~= ", src)
+        src = re.sub(r"\s*<=\s*", " <= ", src)
+        src = re.sub(r"\s*>=\s*", " >= ", src)
+        src = re.sub(r"\s*<\s*", " < ", src)
+        src = re.sub(r"\s*>\s*", " > ", src)
+        src = re.sub(r"\bif\s*\(", "if ", src)
+        src = re.sub(r"\)\s*then", " then", src)
+        src = re.sub(r"\bfunction\s*\(", "function(", src)
+        src = re.sub(r"local\s+function\s+", "local function ", src)
+        src = re.sub(r"\n{3,}", "\n\n", src)
+        lines = []
+        for line in src.splitlines():
+            stripped = line.rstrip()
+            if stripped:
+                lines.append(stripped)
+            elif lines and lines[-1] != "":
+                lines.append("")
+        src = "\n".join(lines)
         return src.strip()
 
     def get_report(self) -> str:
         lines = [
             "=" * 60,
-            " Secrovia V1 — Analysis Report",
+            " Secrovia V1.0.0 — Analysis Report",
             "=" * 60,
             f" VM Type Detected  : {self.report['vm_type']}",
         ]
@@ -8321,6 +10532,10 @@ class ChunkDeobfuscator:
         return "lua"
 
     def preprocess(self) -> str:
+        upgraded = upgrade_chunk_deobfuscator(self.source)
+        if upgraded != self.source:
+            self.source = upgraded
+            return upgraded
         enc = self.detect_encoding()
         if enc == "base64":
             try:
@@ -8356,8 +10571,7 @@ def main():
             "Lua VM Deobfuscator — MoonSec v1/v2/v3 / IronBrew / IronBrew2 /\n"
             "                       Prometheus / Moonveil / Luraph / Luraph v11 /\n"
             "                       Luraph v13 / Luraph v14 / LuaObfuscator /\n"
-            "                       Boronide / ByteCode Lua / AztupBrew / XFuscator /\n"
-            "                       Hyperion / PSU / WeAreDevs / Luacc"
+            "                       Boronide / ByteCode Lua"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -8372,10 +10586,9 @@ def main():
         "--force-vm",
         help=(
             "Force a specific VM type:\n"
-            "  luaobfuscator, boronide, moonsec_v1, moonsec_v2, moonsec_v3,\n"
+            "  luaobfuscator, boronide, xhider, moonsec_v1, moonsec_v2, moonsec_v3,\n"
             "  ironbrew, ironbrew2, prometheus, moonveil, luraph,\n"
-            "  luraph_v11, luraph_v13, luraph_v14, bytecode_lua,\n"
-            "  aztupbrew, xfuscator, hyperion, psu, wearedevs, luacc"
+            "  luraph_v11, luraph_v13, luraph_v14, bytecode_lua"
         ),
         default=None,
     )
@@ -8401,8 +10614,8 @@ def main():
         vms = [
             "moonsec_v1", "moonsec_v2", "moonsec_v3", "ironbrew", "ironbrew2",
             "prometheus", "moonveil", "luraph", "luraph_v11", "luraph_v13",
+            "xhider",
             "luraph_v14", "luaobfuscator", "boronide", "bytecode_lua",
-            "aztupbrew", "xfuscator", "hyperion", "psu", "wearedevs", "luacc",
         ]
         for v in vms:
             print(f"  {v}")
@@ -8544,6 +10757,7 @@ def main():
                     "line": node.line,
                     "children": [ast_to_dict(c) for c in node.children],
                 }
+
             with open(args.dump_ast, "w") as f:
                 json.dump(ast_to_dict(pipeline.ast), f, indent=2)
             print(f"[*] AST dumped to: {args.dump_ast}")

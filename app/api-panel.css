@@ -13,6 +13,7 @@
 .api-token-heading code { color: #d9f99d; font-size: 14px; overflow-wrap: anywhere; }
 .api-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .api-guide { margin-top: 16px; }
+.api-readme-link { color: #d9f99d; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .api-command-list { display: grid; gap: 8px; margin: 14px 0; }
 .api-command-list div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(255,255,255,.03); }
 .api-command-list code { color: #d9f99d; font-weight: 700; }

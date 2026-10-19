@@ -30,10 +30,9 @@ export function ApiPanel({ service, token, onToken }: { service: ServiceKey; tok
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
     <div className="api-guide"><div className="api-guide-title"><BookOpen size={18} /><strong>Usage guide</strong></div><p>{isObfuscator ? 'Send source code or a source link to the API to receive the obfuscated result.' : 'Send a source file or link to the API. Your bot can return the processed output to Discord.'}</p>
-      {isObfuscator && <div className="api-command-list"><div><code>.Obf1-Debug</code><span>Debug obfuscation</span></div><div><code>.Ob1-Normal</code><span>Normal obfuscation</span></div><div><code>.Ob1-Maximum</code><span>Maximum obfuscation</span></div></div>}
-      <pre>{`curl -X POST https://secrovia.vercel.app${info.path} \\
-  -H "Authorization: Bearer ${token ?? 'Secrovia-your-token'}" \\
-  -H "Content-Type: application/json" \\
+      <pre>{`curl -X POST https://secrovia.vercel.app${info.path} \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"code":"..."}'`}</pre>
       <div className="api-discord-example"><span>Discord bot README</span><a href={readmePath} download="secrovia-discord-bot-readme.md" className="api-readme-link">{readmePath}</a><small>Download the English README for creating a Discord bot, registering a custom command, reading files or links, calling the API, and returning the output.</small></div>
     </div>

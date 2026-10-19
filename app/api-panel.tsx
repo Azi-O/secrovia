@@ -30,11 +30,8 @@ export function ApiPanel({ service, token, onToken }: { service: ServiceKey; tok
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
     <div className="api-guide"><div className="api-guide-title"><BookOpen size={18} /><strong>Usage guide</strong></div><p>{isObfuscator ? 'Send source code or a source link to the API to receive the obfuscated result.' : 'Send a source file or link to the API. Your bot can return the processed output to Discord.'}</p>
-      {isObfuscator && <div className="api-command-list"><div><code>Debug</code><span>Bot chọn level debug trước khi gửi code.</span></div><div><code>Medium</code><span>Bot chọn level medium trước khi gửi code.</span></div><div><code>Maximum</code><span>Bot chọn level maximum trước khi gửi code.</span></div><small>API không tự biết command Discord nào được dùng. Bot phải tự lưu level đã chọn và truyền level đó trong request, ví dụ thêm trường <code>level</code> vào JSON payload.</small></div>}
-      <pre>{`curl -X POST https://secrovia.vercel.app${info.path} \
-  -H "Authorization: Bearer " \
-  -H "Content-Type: application/json" \
-  -d '{"code":"..."}'`}</pre>
+      {isObfuscator && <div className="api-command-list"><div><code>Debug</code><span>Select the debug level before sending the code.</span></div><div><code>Medium</code><span>Select the medium level before sending the code.</span></div><div><code>Maximum</code><span>Select the maximum level before sending the code.</span></div><small>The API cannot identify which Discord command was used. Your bot must store the selected level and include it in the request payload, for example with a <code>level</code> field.</small></div>}
+      <pre>{`curl -X POST https://secrovia.vercel.app${info.path} \\\n  -H "Authorization: Bearer ${token ?? 'YOUR_API_TOKEN'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"code":"..."}'`}</pre>
       <div className="api-discord-example"><span>Discord bot README</span><a href={readmePath} download="secrovia-discord-bot-readme.md" className="api-readme-link">{readmePath}</a><small>Download the English README for creating a Discord bot, registering a custom command, reading files or links, calling the API, and returning the output.</small></div>
     </div>
   </section>

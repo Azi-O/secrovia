@@ -57,6 +57,12 @@ body::before { content: ''; position: fixed; z-index: -1; inset: 0; pointer-even
 .dashboard-card::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(120deg, transparent 20%, rgba(255,255,255,.09) 48%, transparent 72%); transform: translateX(-125%); transition: transform .8s var(--motion-ease); }
 .dashboard-card:hover::before { transform: translateX(125%); }
 .dashboard-card:hover { transform: perspective(900px) rotateX(2deg) translateY(-7px) scale(1.012); box-shadow: 0 24px 70px rgba(0,0,0,.28); }
+.discord-dashboard-link { display: flex; align-items: center; gap: 12px; width: fit-content; margin: 18px 0 4px; padding: 11px 14px; color: var(--text); border: 1px solid var(--line); border-radius: 12px; background: rgba(88,101,242,.13); text-decoration: none; transition: border-color .2s ease, transform .2s ease, background .2s ease; }
+.discord-dashboard-link:hover { transform: translateY(-2px); border-color: #7289da; background: rgba(88,101,242,.22); }
+.discord-dashboard-link > svg:first-child { color: #8ea1ff; }
+.discord-dashboard-link span { display: grid; gap: 2px; }
+.discord-dashboard-link strong { font-size: 13px; }
+.discord-dashboard-link small { color: var(--muted); font-size: 11px; }
 .upload-code-button { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 7px 10px; color: var(--text); border: 1px solid var(--line); border-radius: 7px; background: rgba(255,255,255,.05); cursor: pointer; font-size: 11px; }
 .upload-code-button:hover { border-color: var(--accent-lime); }
 .upload-code-button input { display: none; }
